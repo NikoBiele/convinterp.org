@@ -1,0 +1,142 @@
+---
+title: "Boundaries"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+```
+
+Near the ends of the data, a kernel's stencil reaches beyond the last knot: `:b7` combines twelve
+values per evaluated point, so within six spacings of either end some of them do not exist.
+Both packages fill those positions with ghost values extrapolated from the data, and the `bc`
+keyword chooses how. The choice decides whether the interpolant keeps its full order up to the
+boundary, and what it does when the data near the boundary are not smooth.
+
+## The choices
+
+- `:poly` extrapolates with a polynomial of the degree the kernel reproduces. For smooth data
+  this keeps the full convergence order up to the boundary; it is the right choice whenever the
+  data continue smoothly past the last knot.
+- `:linear` and `:quadratic` extrapolate at lower order. They lose accuracy near the boundary
+  on smooth data, but they do not amplify a step or a kink there.
+- `:detect`, the default, uses `:poly` where the data near the boundary allow it and falls
+  back to `:linear` where they don't, decided separately at each boundary. It also falls back
+  when there are too few knots for the polynomial fit.
+
+In Python the same options are strings: `"poly"`, `"linear"`, `"quadratic"`, `"detect"`.
+
+## When it matters
+
+Smooth data with a step close to the right end. Polynomial extrapolation continues the step's
+steepness beyond the data and makes the interpolant overshoot between the last knots; `:detect`
+recognises that the data there are not smooth and switches to linear extrapolation:
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+xs = range(0, 1, length = 21)                             # 21 knots on [0, 1]
+ys = sin.(3xs) .+ (xs .> 0.83)                            # smooth data with a step near the right end
+t = range(0.5, 1, length = 801)                           # fine points on the right half
+
+plot(xlabel = "x", legend = :topleft)
+for (bc, style) in ((:poly, :solid), (:linear, :solid), (:detect, :dash))
+    itp_bc = convolution_interpolation(xs, ys; bc = bc)   # the same data, three boundary conditions
+    plot!(t, itp_bc.(t), linestyle = style, label = "bc = :$bc")
+end
+scatter!(xs, ys, markercolor = :white, markerstrokewidth = 1.5, label = "data", xlims = (0.5, 1))
+```
+
+## Python
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from convinterp import convolution_interpolation
+
+xs = np.linspace(0.0, 1.0, 21)                            # 21 knots on [0, 1]
+ys = np.sin(3.0 * xs) + np.where(xs > 0.83, 1.0, 0.0)     # smooth data with a step near the right end
+t = np.linspace(0.5, 1.0, 801)                            # fine points on the right half
+
+for bc, style in [("poly", "-"), ("linear", "-"), ("detect", "--")]:
+    itp_bc = convolution_interpolation(xs, ys, bc=bc)     # the same data, three boundary conditions
+    plt.plot(t, itp_bc(t), style, label=f'bc="{bc}"')
+plt.plot(xs, ys, "o", mfc="white", label="data")          # the knots themselves
+plt.xlim(0.5, 1.0)
+plt.legend(loc="upper left")
+```
+
+:::
+
+On smooth data the picture reverses: the polynomial extrapolation is the accurate one, and the
+linear fallback costs accuracy in the boundary cells. The same sine, interpolated with `:poly`
+and `:linear`, and the largest error measured in the two outermost cells on each side:
+
+```{julia}
+#| output: asis
+xs2 = range(0, 2π, length = 41)                           # 41 knots over one period
+ys2 = sin.(xs2)                                           # smooth data
+h = step(xs2)                                             # the spacing
+edge = vcat(range(0, 2h, length = 201), range(2π - 2h, 2π, length = 201))   # the outermost two cells on each side
+
+println("| bc | largest error in the boundary cells |")
+println("|:--|--:|")
+for bc in (:poly, :linear, :detect)
+    itp_bc = convolution_interpolation(xs2, ys2; bc = bc)
+    @printf("| `:%s` | %.2e |\n", bc, maximum(abs.(itp_bc.(edge) .- sin.(edge))))
+end
+```
+
+`:detect` matches `:poly` here, as it should: the data are smooth at both ends, so nothing
+triggers the fallback.
+
+## Per side and per axis
+
+The boundary condition can be given per side, as a `(left, right)` pair, and in more
+dimensions per axis, as a tuple of such pairs:
+
+::: {.panel-tabset}
+
+## Julia
+
+```julia
+itp = convolution_interpolation(x, y; bc = (:poly, :linear))          # polynomial on the left, linear on the right
+itp = convolution_interpolation((x, y), z; bc = ((:poly, :poly),      # first axis
+                                                 (:detect, :linear))) # second axis
+```
+
+## Python
+
+```python
+itp = convolution_interpolation(x, y, bc=("poly", "linear"))          # polynomial on the left, linear on the right
+itp = convolution_interpolation((x, y), z, bc=(("poly", "poly"),      # first axis
+                                               ("detect", "linear"))) # second axis
+```
+
+:::
+
+## Outside the data
+
+Everything above concerns points inside the data range; the ghost values exist so that the
+stencil is complete there. What happens for a point outside the range is a separate choice, the
+`extrap` keyword of the Julia package:
+
+- `:throw`, the default, raises an error — the safe choice, since nothing outside the data is
+  known.
+- `:flat` returns the value at the nearest boundary.
+- `:line` continues linearly from the boundary.
+- `:natural` extends the data by the kernel's own extrapolation and interpolates past the
+  boundary, so derivatives stay continuous across it. It extrapolates twice, which becomes
+  expensive in higher dimensions.
+
+```julia
+itp = convolution_interpolation(x, y; extrap = :natural)  # evaluate a little beyond the data
+itp(-0.1)                                                 # no error: extrapolated
+```
+
+The Python port does not extrapolate yet: points outside the data range raise a `ValueError`.
+The [feature matrix](../features.qmd) tracks this.

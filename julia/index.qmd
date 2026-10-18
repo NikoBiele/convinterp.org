@@ -1,0 +1,81 @@
+---
+title: "ConvolutionInterpolations.jl"
+subtitle: "The reference implementation, in Julia"
+engine: julia
+---
+
+ConvolutionInterpolations.jl is the package in which the convolution kernels were developed, and
+it has every capability described on this site: interpolation, differentiation, integration and
+smoothing on uniform grids, interpolation on nonuniform grids, resampling, and fitting to
+scattered data, in any number of dimensions. It is registered in the Julia General registry.
+
+```{julia}
+#| echo: false
+#| output: asis
+using ConvolutionInterpolations
+println("This site was rendered against version ", pkgversion(ConvolutionInterpolations), ".")
+```
+
+## Installation
+
+```julia
+using Pkg
+Pkg.add("ConvolutionInterpolations")
+```
+
+The package depends only on the standard library and a handful of small registered packages;
+plotting is not among them, so the examples on this site load `Plots` separately.
+
+## The functions
+
+Everything is reached through six exported functions, each returning an interpolant that is
+called like a function:
+
+| Function | What it does | Concept page |
+|:--|:--|:--|
+| `convolution_interpolation(knots, data)` | Interpolates gridded data, uniform or not, with derivatives and integrals by keyword | [Interpolation](../concepts/interpolation.qmd), [Derivatives](../concepts/derivatives.qmd), [Integrals](../concepts/integrals.qmd), [Nonuniform grids](../concepts/nonuniform.qmd) |
+| `convolution_interpolation(points, values)` | Fits a grid to scattered points, smoothing noisy data or interpolating trusted data exactly | [Scattered data](../concepts/scattered.qmd) |
+| `fit_scattered(points, values)` | The fit behind the scattered-data method, returning the fitted grid itself | [Scattered data](../concepts/scattered.qmd) |
+| `convolution_smooth(knots, data, B)` | Gaussian smoothing of gridded data, separably in any dimension | [Smoothing](../concepts/smoothing.qmd) |
+| `convolution_gaussian(knots, data, B)` | The same smoothing as an interpolant, evaluated anywhere | [Smoothing](../concepts/smoothing.qmd) |
+| `convolution_resample(knots, data, new_knots)` | Resamples from one uniform grid to another, optionally differentiating in the same pass | [Interpolation](../concepts/interpolation.qmd) |
+
+The kernels themselves are selected with the `kernel` keyword, `:a0` to `:a7` and `:b5` to `:b13`
+on uniform grids and `:n3` or `:b5` to `:b13` on nonuniform ones; the
+[interpolation page](../concepts/interpolation.qmd) has the table of their degrees, continuity
+and convergence orders, and the [API reference](api.qmd) has every keyword.
+
+## What is specific to Julia
+
+The Python port reproduces the numerics of this package to the last bit, so the differences are
+in what the language allows rather than in the results:
+
+- **Generic element types.** The interpolants work for any floating-point type: `Float32` for
+  memory, `Float64` as the default, `BigFloat` for arbitrary precision. The kernel polynomials
+  are derived in exact rational arithmetic and rounded once to the working precision, so a
+  `BigFloat` interpolant is accurate to that precision, not to `Float64`.
+- **Allocation-free evaluation.** Evaluating an interpolant allocates nothing, and the cost of a
+  uniform-grid evaluation does not depend on the grid size. Interpolants can be evaluated from
+  several threads at once.
+- **Lazy construction for large grids.** Boundary ghost values are normally precomputed when the
+  interpolant is built; for large grids in several dimensions the package instead computes them
+  on the fly in boundary cells (`lazy=true`), so construction takes about a millisecond whatever
+  the grid, and no enlarged copy of the data is made. The default chooses by the size of the grid.
+- **Extrapolation.** The `extrap` keyword chooses what happens outside the data: `:throw`
+  (the default), `:flat`, `:line` or `:natural`. The Python port does not extrapolate yet.
+- **Nonuniform grids are detected.** Passing nonuniformly spaced knots switches to the
+  nonuniform kernels without any keyword; the [nonuniform page](../concepts/nonuniform.qmd)
+  explains what changes.
+- **Plotting.** The examples on this site use `Plots`; the interpolants broadcast like any Julia
+  function, so `itp.(xs)` and `itp.(xs, ys')` are all that is needed for lines and surfaces.
+
+## Where next
+
+- The [concept pages](../concepts/interpolation.qmd) walk through each capability with the same
+  example in Julia and Python.
+- The [benchmarks](../benchmarks/index.qmd) compare the package with Interpolations.jl,
+  BSplineKit.jl, Dierckx.jl and others, with the scripts that produced each figure.
+- The [API reference](api.qmd) lists every function and keyword with its docstring, and the
+  [release notes](releases.qmd) the changes between versions.
+- The [source](https://github.com/NikoBiele/ConvolutionInterpolations.jl) is on GitHub, with the
+  issue tracker and the citation file.

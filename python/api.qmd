@@ -1,0 +1,72 @@
+---
+title: "API reference"
+subtitle: "convinterp"
+jupyter: python3
+---
+
+Every entry below is the docstring of the installed package, printed at render time, so this
+page is as current as the version the site was rendered against (shown on the
+[Python page](index.qmd)).
+
+```{python}
+#| echo: false
+import inspect, re
+import convinterp
+
+def docstring(obj):
+    """Print a NumPy-style docstring as Markdown, with headings below the page's own."""
+    lines = (inspect.getdoc(obj) or "").splitlines()       # the docstring, dedented, line by line
+    out = []                                                # the Markdown lines
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # a section heading is a title line underlined with dashes
+        if i + 1 < len(lines) and re.fullmatch(r"-{3,}", lines[i + 1].strip()):
+            title = line.strip()
+            out.append(f"#### {title}")
+            i += 2
+            if title in ("Example", "Examples"):           # a doctest becomes a code block
+                code = []
+                while i < len(lines) and lines[i].strip():
+                    code.append(lines[i])
+                    i += 1
+                out += ["```python", *code, "```"]
+            else:                                           # "name : type" items with indented descriptions
+                while i < len(lines) and lines[i].strip():
+                    item = lines[i]
+                    if " : " in item:
+                        name, kind = item.split(" : ", 1)
+                        head = f"- `{name.strip()}` ({kind.strip()}):"
+                    else:
+                        head = f"- `{item.strip()}`:"
+                    i += 1
+                    desc = []
+                    while i < len(lines) and lines[i].startswith("    "):
+                        desc.append(lines[i].strip())
+                        i += 1
+                    out.append(head + " " + " ".join(desc))
+            continue
+        out.append(line)
+        i += 1
+    print("\n".join(out))
+```
+
+## Functions
+
+### `convolution_interpolation`
+
+```{python}
+#| echo: false
+#| output: asis
+docstring(convinterp.convolution_interpolation)
+```
+
+## Types
+
+### `Interpolation`
+
+```{python}
+#| echo: false
+#| output: asis
+docstring(convinterp.Interpolation)
+```

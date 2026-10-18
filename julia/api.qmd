@@ -1,0 +1,98 @@
+---
+title: "API reference"
+subtitle: "ConvolutionInterpolations.jl"
+engine: julia
+---
+
+Every entry below is the docstring of the installed package, printed at render time, so this
+page is as current as the version the site was rendered against (shown on the
+[Julia page](index.qmd)).
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Markdown
+
+# Print a binding's docstring as Markdown, with its headings demoted below the page's own
+function docstring(name; only_first = false)
+    md = Base.Docs.doc(name)                                   # every docstring of the binding
+    only_first && (md = Markdown.MD(md.content[1:1]))          # for a type: the struct's own, not its call methods
+    out = IOBuffer()                                           # the demoted Markdown is collected here
+    in_fence = false                                           # whether the current line is inside a code block
+    for line in eachline(IOBuffer(Markdown.plain(md)))
+        startswith(line, "```") && (in_fence = !in_fence)      # a fence line opens or closes a code block
+        if !in_fence && occursin(r"^#+ ", line)                # a heading outside code blocks
+            line = "###" * line                                # "# Arguments" becomes "#### Arguments"
+        end
+        println(out, line)
+    end
+    println(String(take!(out)))
+end;
+```
+
+## Functions
+
+### `convolution_interpolation`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_interpolation)
+```
+
+### `fit_scattered`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(fit_scattered)
+```
+
+### `convolution_smooth`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_smooth)
+```
+
+### `convolution_gaussian`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_gaussian)
+```
+
+### `convolution_resample`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_resample)
+```
+
+## Types
+
+### `ConvolutionInterpolation`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(ConvolutionInterpolation; only_first = true)
+```
+
+### `FastConvolutionInterpolation`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(FastConvolutionInterpolation; only_first = true)
+```
+
+### `ConvolutionExtrapolation`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(ConvolutionExtrapolation; only_first = true)
+```

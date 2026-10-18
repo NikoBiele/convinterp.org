@@ -1,0 +1,147 @@
+---
+title: "Nonuniform grids"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+```
+
+On a uniform grid every kernel copy is the same polynomial, shifted. On a nonuniform grid the
+spacing changes from interval to interval, and the Julia package carries a second family of
+kernels whose polynomial pieces are recomputed for the actual knots, so that the interpolant
+keeps its cardinality and its polynomial reproduction on any strictly increasing knot vector.
+Nothing needs to be switched on: passing knots that are not uniformly spaced selects them.
+
+The Python port works on uniform grids only, so far; the [feature matrix](../features.qmd)
+tracks the port.
+
+## The kernels
+
+Two kinds of nonuniform kernel are available:
+
+- `:n3` is the nonuniform cubic, the counterpart of `:a3`: closed-form weights, a four-wide
+  stencil and no precomputation, so it costs about what the uniform cubic costs. It is the
+  default on nonuniform grids.
+- `:b5` to `:b13` are the nonuniform counterparts of the high-order kernels. They converge at
+  order degree + 1 — `:b5` at 6th order and `:b13` at 14th — and provide derivatives up to 7th
+  order. Their weights are projected onto each interval in exact rational arithmetic when the
+  interpolant is built, so construction costs one projection per interval and grows with the
+  number of intervals; evaluation is as local as on a uniform grid.
+
+The uniform `:a` kernels other than `:a3` have no nonuniform counterpart.
+
+## A first example
+
+A damped sine sampled on a grid that is dense where the function varies fast and sparse where
+it has settled, interpolated with `:b7` and differentiated twice:
+
+```{julia}
+x = [0.0, 0.15, 0.4, 0.7, 1.5, 2.5, 3.8, 4.2, 4.6, 4.8, 5.0,
+     5.3, 5.6, 6.0, 6.5, 7.0, 7.3, 7.8, 8.2, 8.5, 9.0, 9.5, 10.0]   # an irregular knot vector
+f(x) = sin(x) * exp(-x / 5)                               # the function being sampled
+y = f.(x)                                                 # the values at the knots
+
+itp = convolution_interpolation(x, y; kernel = :b7)       # nonuniform grid detected from the knots
+d1 = convolution_interpolation(x, y; kernel = :b7, derivative = 1)   # its first derivative
+d2 = convolution_interpolation(x, y; kernel = :b7, derivative = 2)   # its second derivative
+
+xf = range(0, 10, length = 600)                           # fine points for plotting
+plot(xf, f.(xf), color = :black, label = "f", xlabel = "x")
+plot!(xf, itp.(xf), label = "interpolant")
+plot!(xf, d1.(xf), label = "first derivative")
+plot!(xf, d2.(xf), label = "second derivative")
+scatter!(x, y, markercolor = :white, markerstrokewidth = 1.5, label = "knots")
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+df(x) = exp(-x / 5) * (cos(x) - sin(x) / 5)               # the exact first derivative
+println("| at x = 2.9 (a sparse part of the grid) | f | f′ |")
+println("|:--|--:|--:|")
+@printf("| interpolant | %.10f | %.10f |\n", itp(2.9), d1(2.9))
+@printf("| exact | %.10f | %.10f |\n", f(2.9), df(2.9))
+```
+
+## Convergence on a graded grid
+
+The orders hold on nonuniform grids as they do on uniform ones. Here the knots are a uniform
+grid pushed through a smooth monotone map, so that each refinement keeps the grading and halves
+every spacing, and Runge's function is interpolated with four kernels:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+grade(u) = u + 0.3 * sin(π * u) / π                       # a monotone map of [−1, 1] onto itself, dense near the centre
+xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
+kernels = (:n3, :b5, :b7, :b9)
+ns = [41, 81, 161, 321, 641]                              # the numbers of knots
+hs = 2 ./ (ns .- 1)                                       # the spacings of the uniform grid before grading
+
+errors = [begin
+              xn = grade.(range(-1, 1, length = n))       # the graded knots
+              itp_k = convolution_interpolation(xn, runge.(xn); kernel = k)
+              maximum(abs.(itp_k.(xr) .- runge.(xr)))
+          end for n in ns, k in kernels]
+
+plot(xscale = :log10, yscale = :log10, xlabel = "mean spacing h", ylabel = "largest error",
+     legend = :bottomleft, xflip = true)
+for (j, k) in enumerate(kernels)
+    plot!(hs, errors[:, j], marker = :circle, label = string(k))
+end
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+observed = [begin
+                e = errors[:, j]
+                i = findlast(v -> v > 1e-11, e); i = max(i, 2)   # the finest grid still clear of rounding
+                log(e[i-1] / e[i]) / log(hs[i-1] / hs[i])
+            end for j in eachindex(kernels)]
+println("| | ", join(("`$k`" for k in kernels), " | "), " |")
+println("|:--|", "--:|"^length(kernels))
+println("| observed convergence order | ", join((@sprintf("%.2f", o) for o in observed), " | "), " |")
+```
+
+## In more dimensions
+
+Nonuniform knots can be given per axis, and the grid is the tensor product of the axes, so a
+log-spaced axis and a uniform axis combine freely. Each axis chooses its own kernel and
+derivative order:
+
+```{julia}
+xg = 10 .^ range(-2, 0, length = 25)                      # a log-spaced axis on [0.01, 1]
+yg = range(0, 1, length = 20)                             # a uniform axis
+data = [log(xi) * cos(π * yi) for xi in xg, yi in yg]     # log(x)·cos(πy) on the grid
+
+itp2 = convolution_interpolation((xg, yg), data; kernel = :b7)                       # interpolation
+dx2 = convolution_interpolation((xg, yg), data; kernel = (:b7, :b5), derivative = (1, 0))  # ∂/∂x, two kernels
+
+itp2(0.05, 0.3), dx2(0.05, 0.3)
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| at (0.05, 0.3) | f | ∂f/∂x |")
+println("|:--|--:|--:|")
+@printf("| interpolant | %.10f | %.10f |\n", itp2(0.05, 0.3), dx2(0.05, 0.3))
+@printf("| exact | %.10f | %.10f |\n", log(0.05) * cos(0.3π), cos(0.3π) / 0.05)
+```
+
+The precomputation of the `:b` kernels is per interval and per axis, so it stays cheap on a
+tensor-product grid: a 1000 × 1000 grid needs two thousand projections, not a million.
+
+## What is not available
+
+Antiderivatives are uniform-grid only: the precomputed tails that make an integral cost the
+same as an interpolation rely on equal spacing. To integrate data on a nonuniform grid,
+evaluate the nonuniform interpolant on a uniform grid fine enough to carry it and integrate
+that with `derivative = -1`, as on the [integrals page](integrals.qmd). Lazy construction, for
+large grids, is available with `:n3` only; the `:b` kernels build their ghost values when the
+interpolant is created.

@@ -1,0 +1,45 @@
+---
+title: "Feature matrix"
+subtitle: "What each package does today"
+---
+
+Both packages implement the same method: convolution interpolation with the same kernels, the
+same boundary conditions and the same derivative and integral operators, so a result computed in
+one language is reproducible in the other. ConvolutionInterpolations.jl is the reference
+implementation; convinterp is a port with a Rust core, tested against the Julia package to the
+last bit of the boundary coefficients. The port is younger, and the rows below say exactly how
+far it has come.
+
+| Capability | Julia | Python | Concept page |
+|:--|:--:|:--:|:--|
+| Interpolation on uniform grids, any dimension | ✓ | ✓ | [Interpolation and kernels](concepts/interpolation.qmd) |
+| Kernels `a0`…`a7`, `b5`…`b13` | ✓ | ✓ | [Interpolation and kernels](concepts/interpolation.qmd) |
+| Boundary conditions `poly`, `detect`, `linear`, `quadratic` | ✓ | ✓ | [Boundaries](concepts/boundaries.qmd) |
+| Extrapolation beyond the data (`throw`, `flat`, `line`, `natural`) | ✓ | — | [Boundaries](concepts/boundaries.qmd) |
+| Derivatives, per axis, up to the kernel's range | ✓ | ✓ | [Derivatives](concepts/derivatives.qmd) |
+| Integrals, any order, per axis, mixed with derivatives | ✓ | ✓ | [Integrals](concepts/integrals.qmd) |
+| Nonuniform grids (`n3`, `b5`…`b13`) | ✓ | — | [Nonuniform grids](concepts/nonuniform.qmd) |
+| Per-axis kernels and mixed uniform/nonuniform axes | ✓ | — | [Nonuniform grids](concepts/nonuniform.qmd) |
+| Gaussian smoothing (`convolution_smooth`, `convolution_gaussian`) | ✓ | — | [Smoothing](concepts/smoothing.qmd) |
+| Grid-to-grid resampling (`convolution_resample`) | ✓ | — | [Interpolation and kernels](concepts/interpolation.qmd) |
+| Scattered data, exact and smoothing fits (`fit_scattered`) | ✓ | — | [Scattered data](concepts/scattered.qmd) |
+| Adaptive and user-supplied knot grids for scattered data | ✓ | — | [Scattered data](concepts/scattered.qmd) |
+| Lazy construction for large grids and high dimensions | ✓ | — | [Interpolation and kernels](concepts/interpolation.qmd) |
+| `Float32`, `BigFloat` and other element types | ✓ | — | [Interpolation and kernels](concepts/interpolation.qmd) |
+| Zero-allocation evaluation | ✓ | ✓ | [Benchmarks](benchmarks/index.qmd) |
+
+## Reading the matrix
+
+- A ✓ in both columns means the same call with the same arguments gives the same numbers,
+  up to floating-point rounding, in both languages; the concept pages show the two side by side.
+- A ✓ in the Julia column only means the feature exists in the reference implementation and is
+  not yet ported. The concept page documents it with Julia code and says so at the top.
+- The port's Rust core evaluates in `f64` only. Extended and reduced precision are a Julia
+  feature, since the kernels are stored as exact rationals and the Julia code is written
+  generically over the element type.
+
+## What the port will get next
+
+The order follows the Julia package's own history: extrapolation beyond the data, nonuniform
+grids, then smoothing and resampling, then scattered data. Each row moves to ✓ in the release
+notes of the version that ships it, and this page is updated with the release.

@@ -1,0 +1,221 @@
+---
+title: "Interpolation and kernels"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf
+default(size = (720, 400), linewidth = 2, framestyle = :box, legend = :topright, fontfamily = "sans-serif")
+```
+
+Convolution interpolation builds a function from data on a grid by placing a copy of a kernel at
+every knot, scaled by the data value there, and adding them up. The kernels are piecewise
+polynomials with compact support, and they are cardinal: one at their own knot, zero at every
+other. So the sum passes through the data, and between the knots it is a weighted combination
+of a fixed number of nearby values. This is the structure of a cubic spline too; the difference
+is that the kernels are designed, not solved for, and that lets the design go to much higher
+order while every evaluation stays local. The [theory page](../theory.qmd) derives the kernels
+from their defining conditions.
+
+## A first example
+
+A sine sampled sparsely, interpolated with the default kernel, in both packages:
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+x = range(0, 2π, length = 8)                              # eight uniformly spaced samples
+y = sin.(x)                                               # the values at the samples
+itp = convolution_interpolation(x, y)                     # the interpolant, default kernel :b7
+
+xf = range(0, 2π, length = 400)                           # fine points for plotting
+plot(xf, sin.(xf), color = :black, label = "sin(x)")      # the function being sampled
+plot!(xf, itp.(xf), label = "interpolant")                # the interpolant between the samples
+scatter!(x, y, markershape = :circle, markercolor = :white, markerstrokewidth = 1.5, label = "samples")
+```
+
+## Python
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from convinterp import convolution_interpolation
+
+x = np.linspace(0.0, 2 * np.pi, 8)                        # eight uniformly spaced samples
+y = np.sin(x)                                             # the values at the samples
+itp = convolution_interpolation(x, y)                     # the interpolant, default kernel "b7"
+
+xf = np.linspace(0.0, 2 * np.pi, 400)                     # fine points for plotting
+plt.plot(xf, np.sin(xf), "k", label="sin(x)")             # the function being sampled
+plt.plot(xf, itp(xf), label="interpolant")                # the interpolant between the samples
+plt.plot(x, y, "o", mfc="white", label="samples")         # the samples themselves
+plt.legend()
+```
+
+The Python port gives the same values as the Julia package to the last bit, so the figure is
+the same.
+
+:::
+
+Eight samples per period is a coarse sampling for a sine, and the interpolant is already close;
+the next section shows how the error falls as samples are added.
+
+```{julia}
+#| echo: false
+#| output: asis
+err = maximum(abs.(itp.(xf) .- sin.(xf)))                 # the largest error of the interpolant
+@printf("The largest error of the interpolant on the fine points is %.2e.\n", err)
+```
+
+## The kernels
+
+The `kernel` keyword chooses the kernel. All of them are piecewise polynomials that pass through
+the data; they differ in accuracy, smoothness, how many derivatives and integrals they provide,
+and cost. "Continuity" is how many derivatives of the interpolant are continuous, and the stencil
+is how many data values each evaluated point combines.
+
+| Kernel | Degree | Continuity | Derivatives up to | Integrals up to | Convergence | Stencil in $N$ dimensions |
+|:--|--:|:--|--:|--:|:--|:--|
+| `:a0` | 0 | — | — | 2 | 1st order | $2^N$ |
+| `:a1` | 1 | $C^0$ | — | 2 | 2nd order | $2^N$ |
+| `:a3` | 3 | $C^1$ | 1 | 4 | 3rd order | $4^N$ |
+| `:a4` | 3 | $C^1$ | 1 | 4 | 4th order | $6^N$ |
+| `:a5` | 5 | $C^3$ | 1 | 4 | 3rd order | $6^N$ |
+| `:a7` | 7 | $C^5$ | 1 | 4 | 3rd order | $8^N$ |
+| `:b5` | 5 | $C^3$ | 3 | 6 | 6th order | $10^N$ |
+| `:b7` | 7 | $C^5$ | 5 | 8 | 7th order | $12^N$ |
+| `:b9` | 9 | $C^7$ | 6 | 8 | 7th order | $14^N$ |
+| `:b11` | 11 | $C^9$ | 7 | 8 | 7th order | $16^N$ |
+| `:b13` | 13 | $C^{11}$ | 7 | 8 | 7th order | $18^N$ |
+
+In Python the kernels are strings, `"b7"` instead of `:b7`. The convergence order follows from
+the polynomials a kernel reproduces exactly: a kernel that reproduces polynomials up to degree
+$m$ converges at order $m + 1$ as the spacing shrinks.
+
+Some guidance:
+
+- **`:b7` is the default in 1D and 2D**, and the right choice for most smooth data: 7th-order
+  convergence and five continuous derivatives.
+- **`:b7` to `:b13` all converge at 7th order.** The wider kernels are not more accurate; they
+  are smoother and provide higher derivatives. Choose `:b9` to `:b13` when you need those.
+- **`:b5` converges at 6th order** with a smaller stencil, which makes it the default in 3D.
+- **`:a4` is a fast 4th-order kernel**, comparable to a cubic spline, and `:a1` is linear
+  interpolation. `:a5` and `:a7` are smoother than `:a3` but converge at the same 3rd order.
+- **`kernel = :auto`**, the default, chooses by the number of dimensions, to keep the stencil
+  affordable: `:b7` up to 2D, `:b5` in 3D, `:a4` in 4D and 5D, and `:a3` beyond.
+
+## Convergence
+
+The orders in the table are what the error does as samples are added, once the grid resolves
+the function. The test function is Runge's, $1 / (1 + 25x^2)$ on $[-1, 1]$, whose narrow peak
+is the classical difficulty for polynomial interpolation. It is interpolated with four kernels
+on grids of increasing density, and the largest error between the samples is plotted against
+the spacing:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
+kernels = (:a1, :a4, :b5, :b7)                            # linear, quartic, and the two high-order kernels
+ns = [11, 21, 41, 81, 161, 321, 641, 1281]                # the numbers of samples, each grid refining the last
+hs = 2 ./ (ns .- 1)                                       # the corresponding spacings
+
+errors = [begin
+              xn = range(-1, 1, length = n)               # the samples
+              itp_k = convolution_interpolation(xn, runge.(xn); kernel = k)
+              maximum(abs.(itp_k.(xr) .- runge.(xr)))    # the largest error on the fine points
+          end for n in ns, k in kernels]
+
+plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
+     legend = :bottomleft, xflip = true)
+for (j, k) in enumerate(kernels)
+    plot!(hs, errors[:, j], marker = :circle, label = string(k))
+end
+plot!(hs, errors[end, end] .* (hs ./ hs[end]) .^ 7, color = :black, linestyle = :dash, label = "slope 7")
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+# The observed orders between the two finest grids whose errors are still above rounding
+println("| Kernel | Observed order |")
+println("|:--|--:|")
+for (j, k) in enumerate(kernels)
+    i = findlast(e -> e > 1e-12, errors[:, j])            # the finest grid still above rounding
+    i = max(i, 2)
+    order = log(errors[i-1, j] / errors[i, j]) / log(hs[i-1] / hs[i])
+    @printf("| `%s` | %.2f |\n", k, order)
+end
+```
+
+On the coarsest grids every kernel is far from its order: the peak is a few samples wide, and
+no stencil can do better than the data allow. Once the grid resolves the peak the curves settle
+onto their slopes, and `:b7` reaches rounding first. The
+[interpolation benchmark](../benchmarks/interpolation.qmd) runs the same study against the
+other interpolation packages.
+
+## Data in more dimensions
+
+For data on an $N$-dimensional grid, give one knot vector per axis as a tuple. Axis $d$ of the
+data array runs along knot vector $d$, so `data[i, j]` belongs to the point `(x[i], y[j])`. The
+kernels are applied along one axis at a time, so the interpolant in $N$ dimensions is a tensor
+product of the 1D kernels and inherits their convergence order:
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+xg = range(-1, 1, length = 12)                            # 12 knots along x
+yg = range(-1, 1, length = 10)                            # 10 knots along y
+field = [exp(-2 * (xi^2 + yi^2)) * cos(3xi) for xi in xg, yi in yg]   # the data on the coarse grid
+itp2 = convolution_interpolation((xg, yg), field)         # the 2D interpolant
+
+xf2 = range(-1, 1, length = 200)                          # fine x values
+yf2 = range(-1, 1, length = 200)                          # fine y values
+fine = [itp2(xi, yi) for xi in xf2, yi in yf2]            # the interpolant on the fine grid
+
+p1 = heatmap(xg, yg, field', title = "data, 12 × 10", aspect_ratio = 1, colorbar = false)
+p2 = heatmap(xf2, yf2, fine', title = "interpolant, 200 × 200", aspect_ratio = 1, colorbar = false)
+plot(p1, p2, layout = (1, 2), size = (800, 380))
+```
+
+## Python
+
+```python
+xg = np.linspace(-1.0, 1.0, 12)                           # 12 knots along x
+yg = np.linspace(-1.0, 1.0, 10)                           # 10 knots along y
+X, Y = np.meshgrid(xg, yg, indexing="ij")                 # coordinates, shape (12, 10)
+field = np.exp(-2.0 * (X**2 + Y**2)) * np.cos(3.0 * X)    # the data on the coarse grid
+itp2 = convolution_interpolation((xg, yg), field)         # the 2D interpolant
+
+xf2 = np.linspace(-1.0, 1.0, 200)                         # fine x values
+yf2 = np.linspace(-1.0, 1.0, 200)                         # fine y values
+fine = itp2(xf2[:, None], yf2[None, :])                   # a column against a row: shape (200, 200)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3.8))
+ax1.imshow(field.T, origin="lower", extent=(-1, 1, -1, 1)) # .T: imshow puts the first axis vertically
+ax1.set_title("data, 12 × 10")
+ax2.imshow(fine.T, origin="lower", extent=(-1, 1, -1, 1))
+ax2.set_title("interpolant, 200 × 200")
+```
+
+In Python the coordinates broadcast like NumPy arrays, so a column of x values against a row of
+y values evaluates the whole table in one call.
+
+:::
+
+The stencil sets the cost: in 3D, `:b7` combines $12^3 = 1728$ values per evaluated point, which
+is why the default narrows with the dimension. Evaluation never depends on the grid size, only
+on the stencil — locating the cell is one division per axis on a uniform grid.
+
+## Where the data end
+
+Near the ends of the data the stencil reaches beyond the last knot. The packages fill those
+positions by extrapolating the data, polynomially where the data allow it, which keeps the full
+order up to the boundary; the [boundaries page](boundaries.qmd) shows the choices and when they
+matter.

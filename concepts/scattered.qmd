@@ -1,0 +1,189 @@
+---
+title: "Scattered data"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf, Random
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+rms(v) = sqrt(sum(abs2, v) / length(v))                   # root mean square, used throughout
+```
+
+Measurements rarely come on a grid. The Julia package handles scattered points by fitting a
+grid to them: a convolution interpolant on a grid over the points' bounding box, whose knot
+values are chosen so that the interpolant matches the points. The result is an ordinary gridded
+interpolant, so everything on the other pages — evaluation anywhere, derivatives, integrals —
+works on it unchanged. `fit_scattered` does the fit and returns the grid;
+`convolution_interpolation(points, values)` does the fit and returns the interpolant.
+
+The Python port does not include scattered data yet; the [feature matrix](../features.qmd)
+tracks the port.
+
+## Two modes
+
+- `mode = :smooth`, the default, smooths: it minimises the misfit at the points plus a
+  roughness penalty whose weight is chosen by generalized cross-validation, and reports the
+  noise level it found. For measured data, which carry noise.
+- `mode = :exact` interpolates: the fit passes through every point to machine precision, and
+  among the grids that do, the smoothest is chosen. For trusted, noise-free data only — noise
+  would be reproduced exactly and amplified between the points.
+
+The default differs from the gridded constructors, which always interpolate, because
+scattered data are usually measurements.
+
+## Noisy measurements
+
+Points in the unit square, one per column of the matrix, with a smooth signal and noise:
+
+```{julia}
+Random.seed!(1)                                           # reproducible points and noise
+pts = rand(2, 800)                                        # 800 scattered points in 2D, one per column
+signal(x, y) = sin(3x) * cos(2y)                          # the signal
+σ = 0.05                                                  # the noise standard deviation
+vals = [signal(p[1], p[2]) for p in eachcol(pts)]         # the signal at the points
+noisy = vals .+ σ .* randn(800)                           # measured with noise
+
+knots, grid, info = fit_scattered(pts, noisy)             # the fitted grid, smoothing chosen by cross-validation
+itp = convolution_interpolation(knots, grid; kernel = :a4, bc = :poly)   # the interpolant, with the kernel the fit used
+info                                                      # the smoothing parameter and the estimated noise
+````
+
+```{julia}
+#| echo: false
+#| output: asis
+x1, x2 = extrema(pts[1, :])                               # the fit's domain is the points' bounding box
+y1, y2 = extrema(pts[2, :])
+xf = range(x1, x2, length = 150)                          # a fine grid over it, for measuring the error
+yf = range(y1, y2, length = 150)
+itp_fine = [itp(xi, yi) for xi in xf, yi in yf]           # the interpolant on it
+exact2 = [signal(xi, yi) for xi in xf, yi in yf]          # the signal on it
+println("| | the noisy points | the fitted interpolant |")
+println("|:--|--:|--:|")
+@printf("| rms error against the signal | %.4f | %.4f |\n", rms(noisy .- vals), rms(itp_fine .- exact2))
+println()
+println("| | generated | estimated by the fit |")
+println("|:--|--:|--:|")
+@printf("| noise standard deviation | %.4f | %.4f |\n", σ, info.noise)
+```
+
+```{julia}
+#| echo: false
+p1 = heatmap(xf, yf, itp_fine', title = "interpolant", clims = (-1, 1), colorbar = false, aspect_ratio = 1)
+scatter!(p1, pts[1, :], pts[2, :], markersize = 1.5, markercolor = :white, markerstrokewidth = 0.5, label = "")
+p2 = heatmap(xf, yf, exact2', title = "signal", clims = (-1, 1), colorbar = false, aspect_ratio = 1)
+plot(p1, p2, layout = (1, 2), size = (760, 380))
+```
+
+The grid is sized from the point density, as fine as the points resolve, and the smoothing is
+set by the penalty weight, not by the knot count; the [smoothing page](smoothing.qmd) compares
+this fit with Gaussian smoothing on gridded data.
+
+## Trusted data
+
+With `mode = :exact` the interpolant passes through the points. Since it is a gridded
+interpolant underneath, its derivatives and integrals come from the same object; the wrapper
+forwards `derivative`, so a box integral over the points' domain is four evaluations of the
+twofold antiderivative:
+
+```{julia}
+Random.seed!(2)
+pts2 = rand(2, 300)                                       # 300 trusted points
+vals2 = [signal(p[1], p[2]) for p in eachcol(pts2)]       # the signal, without noise
+
+itp_x = convolution_interpolation(pts2, vals2; mode = :exact)                      # interpolates the points
+dx_x  = convolution_interpolation(pts2, vals2; mode = :exact, derivative = (1, 0)) # ∂/∂x of the same fit
+ii_x  = convolution_interpolation(pts2, vals2; mode = :exact, derivative = (-1, -1)) # ∫∫ from the corner
+
+box = (0.2, 0.7, 0.3, 0.8)                                # x₁, x₂, y₁, y₂ of a box inside the domain
+boxint(F, x1, x2, y1, y2) = F(x2, y2) - F(x1, y2) - F(x2, y1) + F(x1, y1)   # inclusion–exclusion
+itp_x(0.4, 0.6), dx_x(0.4, 0.6), boxint(ii_x, box...)
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+exact_box = (cos(3 * 0.2) - cos(3 * 0.7)) / 3 * (sin(2 * 0.8) - sin(2 * 0.3)) / 2   # ∫∫ sin(3x)cos(2y) over the box
+println("| | f(0.4, 0.6) | ∂f/∂x (0.4, 0.6) | ∫∫ over the box |")
+println("|:--|--:|--:|--:|")
+@printf("| from the fit | %.8f | %.8f | %.8f |\n", itp_x(0.4, 0.6), dx_x(0.4, 0.6), boxint(ii_x, box...))
+@printf("| exact | %.8f | %.8f | %.8f |\n", signal(0.4, 0.6), 3cos(3 * 0.4) * cos(2 * 0.6), exact_box)
+```
+
+```{julia}
+#| output: asis
+viol = maximum(abs(itp_x(p[1], p[2]) - v) for (p, v) in zip(eachcol(pts2), vals2))   # the fit at the points
+@printf("The largest deviation of the interpolant from the data at the points is %.1e.\n", viol)
+```
+
+## Clustered points and adaptive grids
+
+An exact fit needs the grid to separate the points: two points in one grid cell cannot both be
+matched. A uniform grid sized from the mean density cannot do that for clustered points, and
+the fit says so with a warning and returns the least-squares fit instead. `grid = :adaptive`
+places the knots of each axis at the quantiles of the points' coordinates, so a dense band of
+points gets a dense band of knots — and where the points are dense because the function
+varies fast there, as in a measurement campaign that samples a layer closely, the dense knots
+are also where the accuracy is needed:
+
+```{julia}
+layer(x) = tanh(40x)                                      # a steep layer at the centre
+u = range(-1, 1, length = 60)
+xs = sign.(u) .* abs.(u) .^ 2                             # 60 points, clustered towards the layer
+pts1 = reshape(xs, 1, :)                                  # as a 1 × n matrix
+ys = layer.(xs)                                           # trusted values
+
+ku, vu, viol_u = fit_scattered(pts1, ys; mode = :exact)                    # uniform grid: warns
+ka, va, viol_a = fit_scattered(pts1, ys; mode = :exact, grid = :adaptive)  # adaptive grid
+itp_u = convolution_interpolation(ku, vu; kernel = :b5, bc = :poly)        # the kernel the fit used
+itp_a = convolution_interpolation(ka, va; kernel = :b5);                   # a nonuniform grid: the nonuniform :b5 kernel
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+xr = range(-1, 1, length = 1001)
+itp_d = convolution_interpolation(collect(xs), ys; kernel = :b5)   # for comparison: the nonuniform kernel with its knots at the points
+println("| | uniform grid | adaptive grid | knots at the points |")
+println("|:--|--:|--:|--:|")
+@printf("| knots | %d | %d | %d |\n", length(ku[1]), length(ka[1]), length(xs))
+@printf("| largest deviation at the points | %.1e | %.1e | %.1e |\n", viol_u, viol_a, maximum(abs.(itp_d.(xs) .- ys)))
+@printf("| largest error against the function | %.1e | %.1e | %.1e |\n", maximum(abs.(itp_u.(xr) .- layer.(xr))), maximum(abs.(itp_a.(xr) .- layer.(xr))), maximum(abs.(itp_d.(xr) .- layer.(xr))))
+```
+
+```{julia}
+#| echo: false
+plot(xlabel = "x", legend = :topleft)
+scatter!(xs, ys, markercolor = :white, markerstrokewidth = 1.5, label = "points")
+plot!(xr, itp_u.(xr), label = "uniform grid")
+plot!(xr, itp_a.(xr), label = "adaptive grid")
+plot!(xr, layer.(xr), color = :black, linestyle = :dash, label = "function")
+scatter!(ka[1], fill(-1.1, length(ka[1])), markershape = :vline, markersize = 6, label = "adaptive knots")
+```
+
+Exactness at the points and accuracy between them are different things. On the same clustered
+points sampled from a function that is smooth everywhere, the uniform fit's least-squares
+compromise is as accurate as the adaptive fit's exact match, often more so, because the
+uniform grid spends its knots evenly where the function needs them evenly. The adaptive grid
+pays off when the points are dense where the function is steep, or when the values themselves
+must be reproduced. The last column of the table is the nonuniform kernel with its knots at
+the points — the plain interpolant through the same samples. The fit is more accurate than
+that as well: among the grids that match the points it takes the smoothest, and the knots it
+has between the points serve that end.
+
+An adaptive grid is nonuniform, so the interpolant on it is the nonuniform one of the
+[nonuniform page](nonuniform.qmd): derivatives are available, antiderivatives are not. The
+spacing ratio of adjacent knots is capped by the `ratio` keyword, which keeps the nonuniform
+kernels well conditioned; raise it for strongly graded data. The grid is still a tensor
+product, so it helps when the point density is roughly separable along the axes — a boundary
+layer, a log-scaled axis — and not for isolated clusters.
+
+## Knots and points
+
+Two keywords size the grid. `oversample` is the number of knots per mean point spacing, with
+mode-dependent defaults (lower for `:smooth`, where the penalty does the regularising; higher
+for `:exact` in two or more dimensions, where random points share cells more often);
+`gridsize` fixes the knot count outright. Both modes warn when the grid is the limit: `:exact`
+when the points could not all be matched, `:smooth` when the fitted smoothing would need a
+finer grid than the budget allows. The [scattered-data benchmark](../benchmarks/scattered.qmd)
+has the convergence of both modes with the point count, and timings.

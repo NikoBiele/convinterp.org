@@ -1,0 +1,177 @@
+---
+title: "Smoothing"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf, Random
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+rms(v) = sqrt(sum(abs2, v) / length(v));                   # root mean square, used throughout
+```
+
+Interpolation passes through the data; for measured data with noise that is not always what
+you want. The Julia package smooths gridded data in two ways. `fit_scattered` fits a convolution
+interpolant to the data with a roughness penalty whose weight is chosen by generalized
+cross-validation, so nothing has to be tuned, and it reports the noise level it found. A
+Gaussian kernel, in `convolution_smooth` and `convolution_gaussian`, averages the data with a
+width you choose; it is a few separable passes over the data, orders of magnitude cheaper, and
+the only feasible choice in many dimensions.
+
+The Python port does not include smoothing yet; the [feature matrix](../features.qmd) tracks
+the port.
+
+## Smoothing with the parameter chosen for you
+
+Gridded data are points that happen to lie on a grid, so they can be handed to the
+scattered-data fit of the [scattered-data page](scattered.qmd) as a matrix of coordinates, one
+column per point. A noisy sine:
+
+```{julia}
+Random.seed!(1)                                           # reproducible noise
+x = range(0, 2π, length = 400)                            # a uniform grid
+clean = sin.(x)                                           # the signal
+noisy = clean .+ 0.1 .* randn(400)                        # the signal with noise of standard deviation 0.1
+
+pts = reshape(collect(x), 1, :)                           # the knots as a 1 × n matrix of points
+knots, vals, info = fit_scattered(pts, noisy)             # the fitted grid, with λ chosen by cross-validation
+fit = convolution_interpolation(knots, vals; kernel = :a4, bc = :poly)   # the interpolant, with the kernel the fit used
+info                                                      # the smoothing parameter and the estimated noise
+```
+
+```{julia}
+xf = range(0, 2π, length = 1000)                          # fine points for plotting
+plot(xlabel = "x", legend = :topright)
+scatter!(x, noisy, markersize = 2.5, markercolor = :white, markerstrokewidth = 1, label = "noisy data")
+plot!(xf, fit.(xf), label = "fitted interpolant")         # the fit, evaluated between the knots
+plot!(xf, sin.(xf), color = :black, label = "signal")     # the signal it was recovering
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | noisy data | fitted interpolant |")
+println("|:--|--:|--:|")
+@printf("| rms error against the signal | %.4f | %.4f |\n", rms(noisy .- clean), rms(fit.(x) .- clean))
+@printf("\nThe noise standard deviation estimated by the fit is %.4f; the noise was generated with 0.1.\n", info.noise)
+```
+
+The result is an interpolant, so derivatives and integrals of the smoothed signal come from the
+same object, as on the other pages. The fit's grid is as fine as the data density allows, so
+that nothing the points resolve is lost before the smoothing is chosen, and it warns, pointing
+at the `oversample` keyword, when the fitted smoothing would need a finer grid still. It solves
+a sparse system, so it costs more than a pass over the data, and the system grows with the
+dimension.
+
+The same fit on the same noise, with the signal's frequency raised, shows what the
+cross-validation does: the smoothing follows the signal, not a preset width.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The fit at several signal frequencies"
+ks = (1, 3, 10, 30)                                       # cycles over the interval
+fit_errors = map(ks) do k
+    cleank = sin.(k .* x)                                 # the signal at this frequency
+    Random.seed!(1)
+    noisyk = cleank .+ 0.1 .* randn(400)                  # the same noise realisation
+    kn, vl, _ = fit_scattered(pts, noisyk)
+    rms(convolution_interpolation(kn, vl; kernel = :a4, bc = :poly).(x) .- cleank)
+end;
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| cycles over the interval | ", join(ks, " | "), " |")
+println("|:--|", "--:|"^length(ks))
+println("| rms error of the fit | ", join((@sprintf("%.4f", e) for e in fit_errors), " | "), " |")
+```
+
+## Gaussian smoothing
+
+The Gaussian kernel has a single parameter `B`, the width in units of the grid spacing: the
+weight of a neighbour $k$ spacings away is proportional to $\exp(-B k^2)$. So a larger `B` is a
+narrower kernel and less smoothing; a smaller `B` is a wider kernel and more smoothing. The
+weights are normalised to sum to one, so the mean level of the data is preserved. Around
+`B ≈ 0.1` the result is usually good, and the optimum is shallow, so precise tuning rarely pays.
+The same noisy sine, smoothed on the grid at a range of widths:
+
+```{julia}
+smoothed_01 = convolution_smooth(x, noisy, 0.1);           # smoothed values on the grid, B = 0.1
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+Bs = (2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01)
+println("| B | ", join(Bs, " | "), " |")
+println("|:--|", "--:|"^length(Bs))
+println("| rms error after smoothing | ", join((@sprintf("%.4f", rms(convolution_smooth(x, noisy, B) .- clean)) for B in Bs), " | "), " |")
+```
+
+Too narrow a kernel leaves the noise; too wide a kernel flattens the peaks of the signal. The
+table shows the shallow optimum between the two — and, against the fit's table above, that the
+best `B` lands a little behind the fit, which was not told the width. A single width also
+cannot follow a signal whose frequency changes across the data, where the fit's roughness
+penalty can.
+
+### In more dimensions
+
+The Gaussian smoothing is separable, one axis at a time, so it costs about the same per value
+in any number of dimensions:
+
+```{julia}
+Random.seed!(2)
+xs = range(0, 2π, length = 150)                           # the grid along x
+ys = range(0, 2π, length = 150)                           # the grid along y
+field = [cos(xi) * sin(yi) for xi in xs, yi in ys]        # the signal
+noisy2 = field .+ 0.2 .* randn(150, 150)                  # with noise
+
+smoothed = convolution_smooth((xs, ys), noisy2, 0.1)      # smoothed values on the grid
+
+p1 = heatmap(xs, ys, noisy2', title = "noisy", clims = (-1.2, 1.2), colorbar = false, aspect_ratio = 1)
+p2 = heatmap(xs, ys, smoothed', title = "smoothed, B = 0.1", clims = (-1.2, 1.2), colorbar = false, aspect_ratio = 1)
+p3 = heatmap(xs, ys, field', title = "signal", clims = (-1.2, 1.2), colorbar = false, aspect_ratio = 1)
+plot(p1, p2, p3, layout = (1, 3), size = (900, 320))
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | noisy | smoothed |")
+println("|:--|--:|--:|")
+@printf("| rms error | %.4f | %.4f |\n", rms(noisy2 .- field), rms(smoothed .- field))
+```
+
+### Evaluating between the knots
+
+`convolution_gaussian` builds the same smoothing as an interpolant, so it can be evaluated at
+any point, not only on the grid. Between the knots the Gaussian weights sum to slightly less
+than one, and the sum deviates more the narrower the kernel; up to `B = 0.34` the deviation is
+below $10^{-12}$, which is why `convolution_gaussian` accepts `B` up to that value only, while
+`convolution_smooth`, which evaluates on the knots, takes any `B`.
+
+```{julia}
+itp = convolution_gaussian(x, noisy, 0.1)                 # the smoothing as an interpolant
+itp(1.5), itp.(x[1:3])                                    # anywhere, or on the knots
+```
+
+On the knots it agrees with `convolution_smooth`:
+
+```{julia}
+#| output: asis
+@printf("The largest difference on the knots is %.2e.\n", maximum(abs.(itp.(x) .- convolution_smooth(x, noisy, 0.1))))
+```
+
+## Which to use
+
+- The fit, when the result matters more than the time: it chooses the smoothing, estimates the
+  noise, follows the signal's own scale, and returns an interpolant. Its cost grows with the
+  grid and the dimension.
+- The Gaussian, when the data are large or high-dimensional, or when the width is known. It is
+  a few microseconds per thousand values, in any number of dimensions.
+
+Both lose some accuracy near the boundaries, where the ghost values are extrapolated from noisy
+data; that is a property of any local method, not of the kernel. The
+[smoothing benchmark](../benchmarks/smoothing.qmd) compares both with the alternatives, in
+accuracy and in time, across noise levels and signal frequencies.

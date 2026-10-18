@@ -1,0 +1,114 @@
+# Quarto configuration of the convinterp documentation website (https://convinterp.org):
+# one method, two packages — ConvolutionInterpolations.jl (the reference implementation)
+# and convinterp (the Python port with a Rust core).
+# Render locally from the repository root with:  quarto render
+# Pages whose code has not changed are not re-executed (freeze); CI only assembles the site.
+project:
+  type: website
+  output-dir: _site                  # the built site; never committed, published by CI
+
+website:
+  title: "convinterp"
+  description: "High-order convolution interpolation, differentiation, integration and smoothing on grids and scattered data, in Julia and Python"
+  site-url: https://convinterp.org
+  repo-url: https://github.com/NikoBiele/convinterp.org
+  repo-actions: [edit, issue]        # links under each page's table of contents
+  search: true
+  favicon: assets/logo.svg           # the icon in the browser tab
+  navbar:
+    logo: assets/logo.svg            # the kernel, next to the site title
+    logo-alt: "convinterp logo: the b7 convolution kernel"
+    right:
+      - text: Julia
+        href: https://github.com/NikoBiele/ConvolutionInterpolations.jl
+      - text: Python
+        href: https://github.com/NikoBiele/convinterp
+      - icon: github
+        href: https://github.com/NikoBiele/convinterp.org
+        aria-label: Documentation repository
+  sidebar:
+    style: floating                  # always visible on wide screens, as on gert.net
+    contents:
+      - href: index.qmd
+        text: Home
+      - section: Concepts
+        contents:
+          - href: concepts/interpolation.qmd
+            text: Interpolation and kernels
+          - href: concepts/boundaries.qmd
+            text: Boundaries
+          - href: concepts/derivatives.qmd
+            text: Derivatives
+          - href: concepts/integrals.qmd
+            text: Integrals
+          - href: concepts/nonuniform.qmd
+            text: Nonuniform grids
+          - href: concepts/smoothing.qmd
+            text: Smoothing
+          - href: concepts/scattered.qmd
+            text: Scattered data
+      - section: Benchmarks
+        contents:
+          - href: benchmarks/index.qmd
+            text: Overview and method
+          - href: benchmarks/interpolation.qmd
+            text: Interpolation
+          - href: benchmarks/derivatives.qmd
+            text: Derivatives
+          - href: benchmarks/integration.qmd
+            text: Integration
+          - href: benchmarks/nonuniform.qmd
+            text: Nonuniform grids
+          - href: benchmarks/smoothing.qmd
+            text: Smoothing
+          - href: benchmarks/scattered.qmd
+            text: Scattered data
+          - href: benchmarks/high-dimensions.qmd
+            text: High dimensions
+      - href: theory.qmd
+        text: Theory
+      - section: Julia
+        contents:
+          - href: julia/index.qmd
+            text: Installation and quick start
+          - href: julia/api.qmd
+            text: API reference
+          - href: julia/releases.qmd
+            text: Release notes
+      - section: Python
+        contents:
+          - href: python/index.qmd
+            text: Installation and quick start
+          - href: python/api.qmd
+            text: API reference
+          - href: python/releases.qmd
+            text: Release notes
+      - href: features.qmd
+        text: Feature matrix
+      - href: about.qmd
+        text: About
+  page-footer:
+    left: "© 2026 Nikolaj Maack Bielefeld · MIT license"
+    right: "Built with [Quarto](https://quarto.org)"
+
+format:
+  html:
+    theme: cosmo                     # the same theme as gert.net
+    toc: true                        # a table of contents on every page
+    html-math-method: katex          # fast math rendering, as on gert.net
+    code-copy: true                  # a copy button on every code block
+    code-overflow: wrap
+    grid:
+      body-width: 950px              # a wider content column for figures
+
+# The engine is chosen per page in its front matter: `engine: julia` for Julia pages (the
+# executed side of the concept pages and the Julia benchmarks), `jupyter: python3` for Python
+# pages. No default here, so a page without a front-matter engine is a mistake, not a surprise.
+
+julia:
+  exeflags: ["--project=@."]         # the Julia cells run in this repository's environment (Project.toml at the root)
+
+execute:
+  freeze: auto                       # re-execute a page only when its code changes; results live in _freeze/
+  echo: true                         # show the code next to its output
+  warning: false                     # keep library warnings out of the pages

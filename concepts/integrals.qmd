@@ -1,0 +1,182 @@
+---
+title: "Integrals"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+```
+
+A negative `derivative` order gives an interpolant of an integral: `derivative = -1` is the
+antiderivative, `-2` the twofold integral, and so on. Like the derivatives, integrals are
+evaluated analytically from the kernel's polynomial pieces, not by quadrature, and they are
+anchored at the first knot: there the integral is zero, and so are all lower integrals. So the
+antiderivative evaluated at $b$ is $\int_{x_0}^{b}$ of the interpolant, and a definite integral
+between two limits is the difference of two evaluations.
+
+## A first example
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+x = range(0, 2π, length = 40)                             # 40 uniformly spaced samples
+y = sin.(x)                                               # the values at the samples
+i1 = convolution_interpolation(x, y; derivative = -1)     # the integral from x[1] = 0
+i2 = convolution_interpolation(x, y; derivative = -2)     # the twofold integral, also anchored at 0
+
+a, b = 1.0, 2.5                                           # the limits of a definite integral
+i1(1.0), i2(1.0), i1(b) - i1(a)                           # 1 − cos(1), 1 − sin(1), cos(a) − cos(b)
+```
+
+## Python
+
+```python
+import numpy as np
+from convinterp import convolution_interpolation
+
+x = np.linspace(0.0, 2 * np.pi, 40)                       # 40 uniformly spaced samples
+y = np.sin(x)                                             # the values at the samples
+i1 = convolution_interpolation(x, y, derivative=-1)       # the integral from x[0] = 0
+i2 = convolution_interpolation(x, y, derivative=-2)       # the twofold integral, also anchored at 0
+
+a, b = 1.0, 2.5                                           # the limits of a definite integral
+i1(1.0), i2(1.0), i1(b) - i1(a)                           # 1 − cos(1), 1 − sin(1), cos(a) − cos(b)
+```
+
+:::
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | ∫₀¹ f | ∫₀¹∫₀ˢ f | ∫ₐᵇ f |")
+println("|:--|--:|--:|--:|")
+@printf("| interpolant | %.12f | %.12f | %.12f |\n", i1(1.0), i2(1.0), i1(b) - i1(a))
+@printf("| exact | %.12f | %.12f | %.12f |\n", 1 - cos(1.0), 1 - sin(1.0), cos(a) - cos(b))
+```
+
+## Integrals don't cost convergence order
+
+Where each derivative order costs one order of convergence, integrals cost none: the integral
+of the interpolant converges at least as fast as the interpolant itself. Runge's function with
+`:b7`, the interpolant and its first and second integrals:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+irunge = (x -> (atan(5x) + atan(5)) / 5,                  # its integral from −1
+          x -> (x * (atan(5x) + atan(5)) - log(1 + 25x^2) / 10 + log(26) / 10) / 5)  # its twofold integral from −1
+xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
+ns = [41, 81, 161, 321, 641, 1281]                        # the numbers of samples
+hs = 2 ./ (ns .- 1)                                       # the corresponding spacings
+orders = 0:-1:-2                                          # the interpolant and two integrals
+exact = (runge, irunge...)                                # the function and its integrals
+
+errors = [begin
+              xn = range(-1, 1, length = n)
+              itp_m = convolution_interpolation(xn, runge.(xn); kernel = :b7, derivative = m)
+              maximum(abs.(itp_m.(xr) .- exact[1-m].(xr)))
+          end for n in ns, m in orders]
+
+plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
+     legend = :bottomleft, xflip = true)
+for (j, m) in enumerate(orders)
+    plot!(hs, errors[:, j], marker = :circle, label = m == 0 ? "interpolant" : "integral order $(-m)")
+end
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+observed = [begin
+                e = errors[:, j]
+                i = findlast(v -> v > 1e-13, e); i = max(i, 2)   # the finest grid still clear of rounding
+                log(e[i-1] / e[i]) / log(hs[i-1] / hs[i])
+            end for j in eachindex(orders)]
+println("| | interpolant | integral order 1 | integral order 2 |")
+println("|:--|--:|--:|--:|")
+println("| observed convergence order | ", join((@sprintf("%.2f", o) for o in observed), " | "), " |")
+```
+
+Evaluating an integral costs about the same as evaluating the interpolant, whatever the number
+of knots: the contribution of every knot left of the stencil is a polynomial in the position
+within the cell, and those are precomputed when the interpolant is built. Each kernel supports
+integrals up to a fixed order, 2 for `:a0` and `:a1`, 4 for the other `:a` kernels, 6 for
+`:b5` and 8 for `:b7` to `:b13`; the precomputed tables grow with the order, so high orders in
+several dimensions cost memory.
+
+## Integrals in more dimensions
+
+In more dimensions the orders are given per axis, and integrals combine freely with
+interpolation and derivatives along the other axes. The antiderivative along every axis is the
+iterated integral from the corner of the grid; a derivative along one axis and an integral
+along another is a Leibniz-rule operator, in one evaluation:
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+xg = range(0, 2π, length = 60)                            # knots along x
+yg = range(0, 2π, length = 60)                            # knots along y
+data = [sin(xi) * cos(yi) for xi in xg, yi in yg]         # sin(x)·cos(y) on the grid
+
+ixy = convolution_interpolation((xg, yg), data; derivative = (-1, -1))   # ∫∫ from (0, 0)
+ix  = convolution_interpolation((xg, yg), data; derivative = (-1, 0))    # ∫ dx, interpolated in y
+dxiy = convolution_interpolation((xg, yg), data; derivative = (1, -1))   # ∂/∂x ∫ dy
+
+ixy(1.0, 2.0), ix(1.0, 2.0), dxiy(1.0, 2.0)
+```
+
+## Python
+
+```python
+xg = np.linspace(0.0, 2 * np.pi, 60)                      # knots along x
+yg = np.linspace(0.0, 2 * np.pi, 60)                      # knots along y
+data = np.sin(xg)[:, None] * np.cos(yg)[None, :]          # sin(x)·cos(y) on the grid
+
+ixy = convolution_interpolation((xg, yg), data, derivative=(-1, -1))    # ∫∫ from (0, 0)
+ix  = convolution_interpolation((xg, yg), data, derivative=(-1, 0))     # ∫ dx, interpolated in y
+dxiy = convolution_interpolation((xg, yg), data, derivative=(1, -1))    # ∂/∂x ∫ dy
+
+ixy(1.0, 2.0), ix(1.0, 2.0), dxiy(1.0, 2.0)
+```
+
+:::
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| at (1, 2) | ∫₀¹∫₀² f | ∫₀¹ f dx | ∂/∂x ∫₀² f dy |")
+println("|:--|--:|--:|--:|")
+@printf("| interpolant | %.12f | %.12f | %.12f |\n", ixy(1.0, 2.0), ix(1.0, 2.0), dxiy(1.0, 2.0))
+@printf("| exact | %.12f | %.12f | %.12f |\n", (1 - cos(1.0)) * sin(2.0), (1 - cos(1.0)) * cos(2.0), cos(1.0) * sin(2.0))
+```
+
+## Discontinuous data
+
+The `:a0` kernel, which is nearest-neighbour interpolation, integrates piecewise-constant data
+exactly: a spike one cell wide and $1/h$ high integrates to a unit step, which is how a
+sampled impulse should behave.
+
+```{julia}
+n = 1001                                                  # knots
+xs = range(0, 2π, length = n)
+h = step(xs)                                              # the spacing
+spike = [abs(xi - π) < h / 2 ? 1 / h : 0.0 for xi in xs]  # a unit-area spike at π
+F = convolution_interpolation(xs, spike; kernel = :a0, derivative = -1)   # its integral
+
+xf = range(0, 2π, length = 801)
+plot(xf, F.(xf), label = "∫ spike", xlabel = "x")
+plot!(xf, (xf .> π) .* 1.0, color = :black, linestyle = :dash, label = "unit step")
+```
+
+## Nonuniform grids
+
+Integrals are available on uniform grids only, in both packages; the nonuniform kernels of the
+Julia package support interpolation and derivatives but not antiderivatives. The
+[nonuniform page](nonuniform.qmd) says what to do instead.

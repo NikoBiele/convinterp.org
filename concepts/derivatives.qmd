@@ -1,0 +1,167 @@
+---
+title: "Derivatives"
+engine: julia
+---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots, Printf
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+```
+
+The interpolant is a sum of polynomial pieces, so its derivatives are polynomial pieces too,
+and both packages evaluate them analytically: the `derivative` keyword gives an interpolant of
+a derivative instead of the data, built from the differentiated kernel. There is no finite
+difference and no step size to tune, and the result is exact to rounding for the interpolant
+that is being differentiated.
+
+## A first example
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+x = range(0, 2π, length = 40)                             # 40 uniformly spaced samples
+y = sin.(x)                                               # the values at the samples
+d1 = convolution_interpolation(x, y; derivative = 1)      # the first derivative of the interpolant
+d2 = convolution_interpolation(x, y; derivative = 2)      # the second derivative
+
+d1(1.0), d2(1.0)                                          # cos(1) and −sin(1), approximately
+```
+
+## Python
+
+```python
+import numpy as np
+from convinterp import convolution_interpolation
+
+x = np.linspace(0.0, 2 * np.pi, 40)                       # 40 uniformly spaced samples
+y = np.sin(x)                                             # the values at the samples
+d1 = convolution_interpolation(x, y, derivative=1)        # the first derivative of the interpolant
+d2 = convolution_interpolation(x, y, derivative=2)        # the second derivative
+
+d1(1.0), d2(1.0)                                          # cos(1) and −sin(1), approximately
+```
+
+:::
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | f′(1) | f″(1) |")
+println("|:--|--:|--:|")
+@printf("| interpolant | %.12f | %.12f |\n", d1(1.0), d2(1.0))
+@printf("| exact | %.12f | %.12f |\n", cos(1.0), -sin(1.0))
+```
+
+## Which orders a kernel provides
+
+Each kernel supports derivatives up to a fixed order (the table on the
+[interpolation page](interpolation.qmd#the-kernels)): one for `:a3` to `:a7`, three for
+`:b5`, five for `:b7`, six for `:b9` and seven for `:b11` and `:b13`. Asking for more is an
+error. The limit is set by accuracy, not by the polynomials: a kernel of degree $p$ has
+non-trivial derivatives up to order $p$, but each order multiplies the rounding error by
+$1/h$, and beyond the listed order that amplification exceeds what the derivative is worth in
+double precision.
+
+## Each order costs one order of convergence
+
+Differentiating the interpolant costs about one order of convergence per derivative order: a
+7th-order kernel gives a 6th-order first derivative and a 5th-order second derivative. Runge's
+function again, with `:b7`, and the largest error of the interpolant and its first three
+derivatives against the spacing:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+drunge = (x -> -50x / (1 + 25x^2)^2,                      # its first derivative
+          x -> (3750x^2 - 50) / (1 + 25x^2)^3,            # its second derivative
+          x -> (15000x - 375000x^3) / (1 + 25x^2)^4)      # its third derivative
+xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
+ns = [41, 81, 161, 321, 641, 1281]                        # the numbers of samples
+hs = 2 ./ (ns .- 1)                                       # the corresponding spacings
+orders = 0:3                                              # the interpolant and three derivatives
+exact = (runge, drunge...)                                # the function and its derivatives
+
+errors = [begin
+              xn = range(-1, 1, length = n)
+              itp_m = convolution_interpolation(xn, runge.(xn); kernel = :b7, derivative = m)
+              maximum(abs.(itp_m.(xr) .- exact[m+1].(xr)))
+          end for n in ns, m in orders]
+
+plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
+     legend = :bottomleft, xflip = true)
+for m in orders
+    plot!(hs, errors[:, m+1], marker = :circle, label = "derivative $m")
+end
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+observed = [begin
+                e = errors[:, m+1]
+                i = findlast(v -> v > 1e-10, e); i = max(i, 2)   # the finest grid still clear of rounding
+                log(e[i-1] / e[i]) / log(hs[i-1] / hs[i])
+            end for m in orders]
+println("| | ", join(("derivative $m" for m in orders), " | "), " |")
+println("|:--|", "--:|"^length(orders))
+println("| observed convergence order | ", join((@sprintf("%.2f", o) for o in observed), " | "), " |")
+```
+
+## Derivatives in more dimensions
+
+In more dimensions `derivative` takes one order per axis. A single number applies to every
+axis, which gives the mixed partial derivative; a tuple gives each axis its own order, with
+zero for the axes that are only interpolated:
+
+::: {.panel-tabset}
+
+## Julia
+
+```{julia}
+xg = range(0, 2π, length = 60)                            # knots along x
+yg = range(0, 1, length = 30)                             # knots along y
+data = [sin(xi) * exp(yi) for xi in xg, yi in yg]         # sin(x)·exp(y) on the grid
+
+dx  = convolution_interpolation((xg, yg), data; derivative = (1, 0))   # ∂/∂x
+dxy = convolution_interpolation((xg, yg), data; derivative = (1, 1))   # ∂²/∂x∂y
+dxx = convolution_interpolation((xg, yg), data; derivative = (2, 0))   # ∂²/∂x²
+
+dx(1.0, 0.5), dxy(1.0, 0.5), dxx(1.0, 0.5)
+```
+
+## Python
+
+```python
+xg = np.linspace(0.0, 2 * np.pi, 60)                      # knots along x
+yg = np.linspace(0.0, 1.0, 30)                            # knots along y
+data = np.sin(xg)[:, None] * np.exp(yg)[None, :]          # sin(x)·exp(y) on the grid
+
+dx  = convolution_interpolation((xg, yg), data, derivative=(1, 0))    # ∂/∂x
+dxy = convolution_interpolation((xg, yg), data, derivative=(1, 1))    # ∂²/∂x∂y
+dxx = convolution_interpolation((xg, yg), data, derivative=(2, 0))    # ∂²/∂x²
+
+dx(1.0, 0.5), dxy(1.0, 0.5), dxx(1.0, 0.5)
+```
+
+:::
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| at (1, ½) | ∂f/∂x | ∂²f/∂x∂y | ∂²f/∂x² |")
+println("|:--|--:|--:|--:|")
+@printf("| interpolant | %.12f | %.12f | %.12f |\n", dx(1.0, 0.5), dxy(1.0, 0.5), dxx(1.0, 0.5))
+@printf("| exact | %.12f | %.12f | %.12f |\n", cos(1.0) * exp(0.5), cos(1.0) * exp(0.5), -sin(1.0) * exp(0.5))
+```
+
+The kernel can also be chosen per axis, `kernel = (:b9, :b5)`, when one axis needs higher
+derivatives than another and the wider stencil is only worth paying for there.
+
+## Nonuniform grids
+
+Derivatives work on nonuniform grids too, in the Julia package, with the nonuniform kernels'
+own differentiated weights; the [nonuniform page](nonuniform.qmd) has the details.

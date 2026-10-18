@@ -1,0 +1,45 @@
+---
+title: "Release notes"
+subtitle: "ConvolutionInterpolations.jl"
+jupyter: python3
+---
+
+The notes of every release, as published on
+[GitHub](https://github.com/NikoBiele/ConvolutionInterpolations.jl/releases), newest first.
+Each release is archived on Zenodo under its own DOI; the citation file in the repository has
+the details.
+
+```{python}
+#| echo: false
+#| output: asis
+import json, re, urllib.request
+
+REPO = "NikoBiele/ConvolutionInterpolations.jl"            # the repository whose releases are listed
+
+def demote(body):
+    """Push a release body's headings below the page's own, leaving code blocks alone."""
+    out, in_fence = [], False
+    for line in body.splitlines():
+        if line.startswith("```"):                           # a fence line opens or closes a code block
+            in_fence = not in_fence
+        if not in_fence and re.match(r"^#+ ", line):         # a heading outside code blocks
+            line = "##" + line                               # "## Highlights" becomes "#### Highlights"
+        out.append(line)
+    return "\n".join(out)
+
+def absolute_links(body):
+    """Point relative links, which GitHub resolves inside the repository, at the repository."""
+    blob = f"https://github.com/{REPO}/blob/main/"
+    return re.sub(r"\]\((?!https?://|#|mailto:)", "](" + blob, body)
+
+url = f"https://api.github.com/repos/{REPO}/releases?per_page=100"
+request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+releases = json.load(urllib.request.urlopen(request))      # newest first, as GitHub orders them
+
+for release in releases:
+    tag = release["tag_name"]
+    date = release["published_at"][:10]                      # the day, from the ISO timestamp
+    print(f"## [{tag}]({release['html_url']}) — {date}\n")
+    print(demote(absolute_links((release["body"] or "").replace("\r\n", "\n"))))
+    print()
+```

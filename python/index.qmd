@@ -1,0 +1,74 @@
+---
+title: "convinterp"
+subtitle: "The Python port, with a Rust core"
+jupyter: python3
+---
+
+convinterp brings the convolution kernels to Python. The interface works with NumPy arrays; the
+numerics run in a compiled Rust core, with the same exact polynomial kernels as the Julia
+package. Every released feature is tested against ConvolutionInterpolations.jl, the reference
+implementation, so the two give the same results to the last bit of the boundary coefficients.
+
+```{python}
+#| echo: false
+#| output: asis
+import importlib.metadata
+print(f"This site was rendered against version {importlib.metadata.version('convinterp')}.")
+```
+
+## Installation
+
+```bash
+pip install convinterp
+```
+
+Prebuilt wheels are available for Linux, macOS and Windows, on x86_64 and ARM, so no Rust
+toolchain is needed. NumPy is the only dependency.
+
+## What the port has
+
+The port is an alpha release, growing feature by feature towards the Julia package. The
+[feature matrix](../features.qmd) is the authoritative list; in short, what is there is
+interpolation on uniform grids in any number of dimensions, with every derivative and integral
+order the kernels support, mixed per axis, and the automatic boundary detection. Nonuniform
+grids, smoothing, resampling and scattered data are on the roadmap, in that order.
+
+Everything is reached through one function, `convolution_interpolation`, which returns an
+interpolant that is called like a function:
+
+| Call | What it does | Concept page |
+|:--|:--|:--|
+| `convolution_interpolation(x, y)` | Interpolates 1D data on a uniform grid | [Interpolation](../concepts/interpolation.qmd) |
+| `convolution_interpolation((x, y), data)` | Interpolates gridded data in any number of dimensions | [Interpolation](../concepts/interpolation.qmd) |
+| `convolution_interpolation(x, y, derivative=k)` | A derivative of the interpolant, evaluated analytically | [Derivatives](../concepts/derivatives.qmd) |
+| `convolution_interpolation(x, y, derivative=-k)` | An integral of the interpolant, anchored at the first knot | [Integrals](../concepts/integrals.qmd) |
+| `convolution_interpolation(x, y, bc="poly")` | Chooses the boundary extrapolation, per side or per axis | [Boundaries](../concepts/boundaries.qmd) |
+
+The `kernel` argument selects the kernel, `"a0"` to `"a7"` and `"b5"` to `"b13"`; the
+[interpolation page](../concepts/interpolation.qmd) has the table of their degrees, continuity
+and convergence orders, and the [API reference](api.qmd) has every argument.
+
+## What is specific to Python
+
+- **NumPy broadcasting.** An interpolant accepts a number or an array of any shape and returns
+  the same shape; in more dimensions the coordinate arrays broadcast against each other like
+  NumPy arrays, so a column of x values against a row of y values evaluates a whole table.
+- **Float64 only.** The Rust core works in double precision; the generic element types of the
+  Julia package are not ported.
+- **Errors are `ValueError`s.** Nonuniform knots, points outside the data range, and derivative
+  orders a kernel does not support all raise a `ValueError` that says what is wrong.
+- **No extrapolation yet.** Points must lie inside the data range; the `extrap` keyword of the
+  Julia package has no counterpart yet.
+- **Plotting.** The examples on this site use Matplotlib; an interpolant evaluated on
+  `np.linspace` arrays plots like any NumPy function.
+
+## Where next
+
+- The [concept pages](../concepts/interpolation.qmd) walk through each capability with the same
+  example in Python and Julia.
+- The [benchmarks](../benchmarks/index.qmd) compare the port with SciPy's interpolators on the
+  same test functions, with the scripts that produced each figure.
+- The [API reference](api.qmd) lists every argument with its docstring, and the
+  [release notes](releases.qmd) the changes between versions.
+- The [source](https://github.com/NikoBiele/convinterp) is on GitHub, with the issue tracker and
+  the citation file.

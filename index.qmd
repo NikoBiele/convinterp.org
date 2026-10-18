@@ -1,0 +1,105 @@
+---
+title: "convinterp"
+subtitle: "High-order convolution interpolation, differentiation, integration and smoothing on grids and scattered data — in Julia and Python"
+---
+
+convinterp is one method in two languages. Data sampled on a grid, uniform or not, in one
+dimension or many, are interpolated by convolution with a piecewise-polynomial kernel; the
+interpolant is then differentiated and integrated analytically, or smoothed, or built from
+scattered points by fitting the grid to them. The kernels reach 7th-order convergence on uniform
+grids and up to 14th on nonuniform ones, with evaluation cost independent of the grid size.
+
+- [**ConvolutionInterpolations.jl**](https://github.com/NikoBiele/ConvolutionInterpolations.jl)
+  is the reference implementation, in Julia: every feature on this site, generic over the element
+  type, with the kernels stored as exact rationals.
+- [**convinterp**](https://github.com/NikoBiele/convinterp) is the Python port, with a Rust core
+  and a NumPy interface. It is tested against the Julia package to the last bit of the boundary
+  coefficients, and the [feature matrix](features.qmd) says which parts have been ported so far.
+
+The [concept pages](concepts/interpolation.qmd) explain each capability with the same example in
+both languages; the [benchmarks](benchmarks/index.qmd) compare both packages with the established
+alternatives in their language, on the same test functions and with the scripts that produced
+every figure; and the [theory page](theory.qmd) derives the kernels from their defining
+conditions.
+
+## Installation
+
+::: {.panel-tabset}
+
+## Julia
+
+```julia
+using Pkg
+Pkg.add("ConvolutionInterpolations")
+```
+
+## Python
+
+```bash
+pip install convinterp
+```
+
+Prebuilt wheels are available for Linux, macOS and Windows, on x86_64 and ARM.
+
+:::
+
+## A first example
+
+The same data, the same kernel, the same results: a sine sampled at fifty points, interpolated
+with the default `b7` kernel and evaluated between the samples, with its derivative and its
+integral from the same fifty values.
+
+::: {.panel-tabset}
+
+## Julia
+
+```julia
+using ConvolutionInterpolations
+
+x = range(0, 2π, length = 50)                             # fifty uniformly spaced samples
+y = sin.(x)                                               # the values at the samples
+
+itp = convolution_interpolation(x, y)                     # the interpolant, default kernel :b7
+d_itp = convolution_interpolation(x, y; derivative = 1)   # the derivative of the interpolant
+i_itp = convolution_interpolation(x, y; derivative = -1)  # its integral, zero at x = 0
+
+itp(1.0), d_itp(1.0), i_itp(1.0)                          # evaluate between the samples
+```
+
+| | f(1) | f′(1) | ∫₀¹ f |
+|:--|--:|--:|--:|
+| from fifty samples | 0.841470984879974 | 0.540302305515489 | 0.459697694147643 |
+| exact | 0.841470984807897 | 0.540302305868140 | 0.459697694131860 |
+
+## Python
+
+```python
+import numpy as np
+from convinterp import convolution_interpolation
+
+x = np.linspace(0.0, 2 * np.pi, 50)                       # fifty uniformly spaced samples
+y = np.sin(x)                                             # the values at the samples
+
+itp = convolution_interpolation(x, y)                     # the interpolant, default kernel "b7"
+d_itp = convolution_interpolation(x, y, derivative=1)     # the derivative of the interpolant
+i_itp = convolution_interpolation(x, y, derivative=-1)    # its integral, zero at x = 0
+
+itp(1.0), d_itp(1.0), i_itp(1.0)                          # evaluate between the samples
+```
+
+| | f(1) | f′(1) | ∫₀¹ f |
+|:--|--:|--:|--:|
+| from fifty samples | 0.841470984879974 | 0.540302305515489 | 0.459697694147643 |
+| exact | 0.841470984807897 | 0.540302305868140 | 0.459697694131860 |
+
+:::
+
+Ten correct digits from fifty samples per period; the point of the kernels is that the error
+keeps falling as the 7th power of the spacing as samples are added — the
+[interpolation benchmark](benchmarks/interpolation.qmd) shows the curve.
+
+## Status
+
+ConvolutionInterpolations.jl is at version 1 and its interface is stable. convinterp is an alpha
+release: what it has is tested against the reference, and what it lacks is listed on the
+[feature matrix](features.qmd).

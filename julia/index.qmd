@@ -73,7 +73,7 @@ in what the language allows rather than in the results:
 
 - The [concept pages](../concepts/interpolation.qmd) walk through each capability with the same
   example in Julia and Python.
-- The [benchmarks](../benchmarks/index.qmd) compare the package with Interpolations.jl,
+- The [benchmarks](../benchmarks/julia/index.qmd) compare the package with Interpolations.jl,
   BSplineKit.jl, Dierckx.jl and others, with the scripts that produced each figure.
 - The [API reference](api.qmd) lists every function and keyword with its docstring, and the
   [release notes](releases.qmd) the changes between versions.

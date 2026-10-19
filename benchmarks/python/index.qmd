@@ -1,0 +1,59 @@
+---
+title: "Python benchmarks"
+subtitle: "Overview and method"
+jupyter: python3
+---
+
+The pages in this section compare convinterp with the established alternatives in Python —
+SciPy's interpolators and NumPy's Chebyshev interpolation — on the same test functions and
+with the same measurements as the [Julia benchmarks](../julia/index.qmd), and every figure and
+number is computed from the installed versions when the site is rendered. The scripts are the
+code cells themselves, folded on the pages.
+
+## What is compared
+
+| Page | convinterp against |
+|:--|:--|
+| [Interpolation](interpolation.qmd) | SciPy `CubicSpline`, `make_interp_spline`, NumPy Chebyshev |
+| [Derivatives](derivatives.qmd) | SciPy `CubicSpline`, `make_interp_spline`, NumPy Chebyshev |
+| [Integration](integration.qmd) | SciPy `CubicSpline`, `make_interp_spline`, `simpson`, `romb` |
+
+The port has the three capabilities above; the pages grow as the port does. The port gives
+the same numbers as ConvolutionInterpolations.jl, so for the capabilities not yet ported the
+Julia pages show what to expect.
+
+## How
+
+**Accuracy** is the largest absolute error against the exact function on a fine grid of test
+points, as a function of the number of samples, on Runge's function $1/(1 + 25x^2)$ on
+$[-1, 1]$ — smooth, but with a narrow peak that is the classical difficulty for polynomial
+interpolation. Derivatives and integrals are compared with the exact ones of the same
+function. Each method is used at its own highest practical order: SciPy's B-spline
+interpolant is given degree 7 as well as the cubic, and Chebyshev interpolation — which
+chooses its own sample points and so is not an option for data on a grid — is shown as the
+reference for what any polynomial method can reach.
+
+**Time** is measured with `timeit`, as the minimum over repeated runs, for construction and
+evaluation separately: convinterp computes nothing at construction beyond the boundary values,
+and evaluates in constant time per point whatever the grid size, so where the time goes
+differs between the packages.
+
+Timings depend on the machine. The ones on these pages were measured on:
+
+```{python}
+#| echo: false
+#| output: asis
+import platform, os, sys
+import numpy, scipy
+print(f"- Python {platform.python_version()}, NumPy {numpy.__version__}, SciPy {scipy.__version__}, "
+      f"on {platform.processor() or platform.machine()}, {os.cpu_count()} threads")
+```
+
+Relative timings transfer to other machines better than absolute ones.
+
+## What the comparisons do not show
+
+SciPy's interpolators are mature and general, and the comparisons are on the ground the
+convolution kernels were designed for: uniform grids, smooth data, high accuracy. A method
+built for other ground — monotone data (`PchipInterpolator`), unstructured points
+(`griddata`, `RBFInterpolator`), extrapolation — is not worse for losing a comparison here.

@@ -17,10 +17,10 @@ grids and up to 14th on nonuniform ones, with evaluation cost independent of the
   coefficients, and the [feature matrix](features.qmd) says which parts have been ported so far.
 
 The [concept pages](concepts/interpolation.qmd) explain each capability with the same example in
-both languages; the [benchmarks](benchmarks/index.qmd) compare both packages with the established
-alternatives in their language, on the same test functions and with the scripts that produced
-every figure; and the [theory page](theory.qmd) derives the kernels from their defining
-conditions.
+both languages; the [Julia](benchmarks/julia/index.qmd) and [Python](benchmarks/python/index.qmd)
+benchmarks compare both packages with the established alternatives in their language, on the same
+test functions and with the scripts that produced every figure; and the [theory page](theory.qmd)
+derives the kernels from their defining conditions.
 
 ## Installation
 
@@ -96,7 +96,7 @@ itp(1.0), d_itp(1.0), i_itp(1.0)                          # evaluate between the
 
 Ten correct digits from fifty samples per period; the point of the kernels is that the error
 keeps falling as the 7th power of the spacing as samples are added — the
-[interpolation benchmark](benchmarks/interpolation.qmd) shows the curve.
+[interpolation benchmark](benchmarks/julia/interpolation.qmd) shows the curve.
 
 ## Status
 

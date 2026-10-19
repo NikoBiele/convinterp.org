@@ -1,0 +1,66 @@
+---
+title: "Julia Benchmarks"
+subtitle: "Overview and method"
+engine: julia
+---
+
+The pages in this section compare the two packages with the established alternatives in their
+language, on the same test functions and with the same measurements, and every figure and
+number is computed from the installed versions when the site is rendered — nothing is typed
+in. The scripts are the code cells themselves, folded on the pages; unfold any of them to see
+exactly what was run.
+
+## What is compared
+
+| Page | ConvolutionInterpolations.jl against |
+|:--|:--|
+| [Interpolation](interpolation.qmd) | Interpolations.jl, BSplineKit.jl, Dierckx.jl |
+| [Derivatives](derivatives.qmd) | Interpolations.jl, BSplineKit.jl, Dierckx.jl |
+| [Integration](integration.qmd) | BSplineKit.jl, Dierckx.jl, NumericalIntegration.jl |
+| [Nonuniform grids](nonuniform.qmd) | Interpolations.jl, BSplineKit.jl, Dierckx.jl |
+| [Smoothing](smoothing.qmd) | the package's own Gaussian, and smoothing splines |
+| [Scattered data](scattered.qmd) | ScatteredInterpolation.jl, radial basis functions |
+| [High dimensions](high-dimensions.qmd) | Interpolations.jl |
+
+The Julia package is the reference implementation and has every feature, so these pages cover
+everything; the [Python benchmarks](../python/index.qmd) compare the port with SciPy on the
+capabilities it has, and since the port gives the same numbers as the Julia package, the
+accuracy results here hold for it too.
+
+## How
+
+**Accuracy** is the largest absolute error against the exact function on a fine grid of test
+points, as a function of the grid spacing, on Runge's function $1/(1 + 25x^2)$ on $[-1, 1]$ —
+smooth, but with a narrow peak that is the classical difficulty for polynomial interpolation,
+so that the convergence order only shows once the grid resolves the peak. Derivatives and
+integrals are compared with the exact derivatives and integrals of the same function. Each
+method is used at its own highest practical order: a cubic spline is a cubic spline, and a
+B-spline package is given a high degree where it offers one.
+
+**Time** is measured with [Chairmarks](https://github.com/LilithHafner/Chairmarks.jl), which
+runs each expression repeatedly and reports the minimum; setup (constructing the interpolant)
+and queries (evaluating it) are timed separately, because the packages differ in where they
+spend their time: the convolution kernels compute nothing at construction beyond the boundary
+values, and evaluate in constant time per point, whatever the grid size.
+
+Timings depend on the machine. The ones on these pages were measured on:
+
+```{julia}
+#| echo: false
+#| output: asis
+using InteractiveUtils
+println("- Julia ", VERSION, " on ", Sys.cpu_info()[1].model, ", ", Sys.CPU_THREADS, " threads, ",
+        round(Int, Sys.total_memory() / 2^30), " GiB")
+```
+
+Relative timings between packages transfer to other machines better than absolute ones.
+
+## What the comparisons do not show
+
+The alternatives are mature, widely used packages, and the comparisons are on the ground the
+convolution kernels were designed for: uniform or tensor-product grids, smooth data, high
+accuracy. A package built for other ground — unstructured meshes, extrapolation, data with
+discontinuities — is not worse for losing a comparison here. Where a competitor has no
+counterpart for a capability (analytic integrals in constant time, exact scattered-data
+interpolation with derivatives and integrals), the page says so rather than inventing a
+comparison.

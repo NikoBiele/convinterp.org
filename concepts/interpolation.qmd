@@ -155,7 +155,7 @@ end
 On the coarsest grids every kernel is far from its order: the peak is a few samples wide, and
 no stencil can do better than the data allow. Once the grid resolves the peak the curves settle
 onto their slopes, and `:b7` reaches rounding first. The
-[interpolation benchmark](../benchmarks/interpolation.qmd) runs the same study against the
+[interpolation benchmark](../benchmarks/julia/interpolation.qmd) runs the same study against the
 other interpolation packages.
 
 ## Data in more dimensions
@@ -212,6 +212,47 @@ y values evaluates the whole table in one call.
 The stencil sets the cost: in 3D, `:b7` combines $12^3 = 1728$ values per evaluated point, which
 is why the default narrows with the dimension. Evaluation never depends on the grid size, only
 on the stencil — locating the cell is one division per axis on a uniform grid.
+
+## Resampling
+
+When the result is wanted on another uniform grid rather than at arbitrary points, the Julia
+package's `convolution_resample` goes from grid to grid in one separable pass — one axis at a
+time, with the kernel weights of each output knot computed once per axis — and can
+differentiate on the way. It agrees with evaluating the interpolant at the new knots, and is
+faster, since neither the interpolant nor its ghost values are built:
+
+```{julia}
+xc = range(0, 2π, length = 30)                            # the coarse grid along x
+yc = range(0, 2π, length = 30)                            # and along y
+zc = [sin(xi) * cos(yi) for xi in xc, yi in yc]           # sin(x)·cos(y) on it
+xn = range(0, 2π, length = 120)                           # the fine grid along x
+yn = range(0, 2π, length = 120)                           # and along y
+
+zn = convolution_resample((xc, yc), (xn, yn), zc)         # the data on the fine grid
+zn_dx = convolution_resample((xc, yc), (xn, yn), zc; derivative = (1, 0));  # ∂/∂x on the fine grid
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+using Chairmarks
+itp_c = convolution_interpolation((xc, yc), zc; kernel = :b13)   # the same kernel the resampler uses by default
+by_itp = [itp_c(xi, yi) for xi in xn, yi in yn]                  # the interpolant at the fine knots
+t_res = (@b convolution_resample(($xc, $yc), ($xn, $yn), $zc)).time
+t_itp = (@b begin                                                 # construct once, then evaluate at every fine knot
+    itp_t = convolution_interpolation(($xc, $yc), $zc; kernel = :b13)
+    [itp_t(xi, yi) for xi in $xn, yi in $yn]
+end).time
+println("| | resample | construct and evaluate |")
+println("|:--|--:|--:|")
+@printf("| time | %.2f ms | %.2f ms |\n", 1e3 * t_res, 1e3 * t_itp)
+@printf("| largest difference between the two | %.1e | |\n", maximum(abs.(zn .- by_itp)))
+@printf("| largest error of ∂/∂x against cos(x)cos(y) | %.1e | |\n", maximum(abs.(zn_dx .- [cos(xi) * cos(yi) for xi in xn, yi in yn])))
+```
+
+The default kernel of the resampler is `:b13`, the smoothest of the 7th-order kernels;
+`kernel` and `bc` take the same values as for the interpolant. Antiderivatives are not
+resampled; build the interpolant with `derivative = -1` for those.
 
 ## Where the data end
 

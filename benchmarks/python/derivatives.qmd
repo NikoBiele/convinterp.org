@@ -1,0 +1,108 @@
+---
+title: "Derivatives"
+subtitle: "convinterp against SciPy and NumPy"
+jupyter: python3
+---
+
+The first three derivatives of Runge's function from uniformly spaced samples: convinterp's
+analytic derivatives of its kernels, against the derivatives of SciPy's cubic spline and of
+Chebyshev interpolation. The boundary condition for convinterp is `"poly"` throughout.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Packages and the test function"
+import numpy as np                                     # arrays and Chebyshev evaluation
+import matplotlib.pyplot as plt                        # plotting
+from scipy.fft import dct                              # fast cosine transform, for Chebyshev coefficients
+from scipy.interpolate import CubicSpline              # cubic spline reference
+from convinterp import convolution_interpolation       # the package under test
+
+
+def runge(x):
+    # Runge's function: smooth, but hard for polynomial interpolation on uniform grids
+    return 1.0 / (1.0 + 25.0 * x**2)
+
+
+def runge_derivative(x, k):
+    # the exact k-th derivative of Runge's function, for k = 1, 2, 3
+    s = 1.0 + 25.0 * x**2                                            # the denominator's base
+    if k == 1:
+        return -50.0 * x / s**2
+    if k == 2:
+        return 50.0 * (75.0 * x**2 - 1.0) / s**3
+    if k == 3:
+        return 15000.0 * x * (1.0 - 25.0 * x**2) / s**4
+    raise ValueError("k must be 1, 2 or 3")
+
+
+def chebyshev_coefficients(f, n):
+    # coefficients of the interpolant of f at the n Chebyshev points of the first kind,
+    # by a type-II DCT (stable and O(n log n))
+    j = np.arange(n)                                                 # node indices 0 … n−1
+    nodes = np.cos(np.pi * (j + 0.5) / n)                            # Chebyshev points of the first kind
+    coefs = dct(f(nodes), type=2) / n                                # c_k = (2/n) Σ_j f(x_j) cos(πk(j + ½)/n)
+    coefs[0] /= 2                                                    # the constant term has half weight
+    return coefs
+```
+
+## Accuracy
+
+@fig-derivatives shows the maximum error of each derivative over a dense set of test points
+as the number of samples grows.
+
+```{python}
+#| label: fig-derivatives
+#| fig-cap: "Maximum error of the first three derivatives of Runge's function. The b-series kernels lose one order of convergence per derivative (dashed lines for \"b7\" to \"b13\"), and their rounding floor rises slowly. Chebyshev differentiation converges fastest but amplifies rounding by about n² per derivative order."
+#| code-fold: true
+def derivative_study(orders=(1, 2, 3)):
+    x_test = np.linspace(-1.0, 1.0, 11_001)                          # dense test points
+    ns = np.unique(np.logspace(1, 4, 100).astype(int))               # 10 … 10000 samples, log-spaced
+    kernels = ["b5", "b7", "b9", "b11", "b13"]                       # all support derivatives up to 3
+
+    fig, axes = plt.subplots(len(orders), 1, figsize=(10, 6 * len(orders)))  # panels stacked vertically
+    for ax, k in zip(axes, orders):
+        exact = runge_derivative(x_test, k)                          # the exact k-th derivative
+        errors = {kern: [] for kern in kernels}                      # max error per kernel, per n
+        spline_errors, cheb_errors = [], []                          # the two references
+
+        for n in ns:
+            x = np.linspace(-1.0, 1.0, n)                            # uniform grid with n samples
+            y = runge(x)                                             # the data on it
+            for kern in kernels:
+                d_itp = convolution_interpolation(x, y, kernel=kern, bc="poly", derivative=k)
+                errors[kern].append(np.max(np.abs(d_itp(x_test) - exact)))
+            spline = CubicSpline(x, y)                               # not-a-knot cubic spline
+            spline_errors.append(np.max(np.abs(spline(x_test, nu=k) - exact)))  # its k-th derivative
+            coefs = np.polynomial.chebyshev.chebder(chebyshev_coefficients(runge, n), m=k)  # differentiate k times
+            cheb_errors.append(np.max(np.abs(np.polynomial.chebyshev.chebval(x_test, coefs) - exact)))
+
+        ax.loglog(ns, spline_errors, lw=2.5, color="orange", label="Cubic spline (SciPy)")
+        for kern in kernels:
+            ax.loglog(ns, errors[kern], lw=2, label=f'"{kern}"')     # one line per convinterp kernel
+        ax.loglog(ns, cheb_errors, lw=2.5, color="blue", label="Chebyshev")
+        i100 = np.argmin(np.abs(ns - 100))                           # anchor the slope line near n = 100
+        anchor = 10.0 * errors["b7"][i100]                           # a decade above the b7 curve there
+        ax.loglog(ns, anchor * (ns[i100] / ns) ** (7 - k), "k--", lw=2,
+                  label=rf"$\mathcal{{O}}(h^{{{7 - k}}})$")          # the expected order: 7 − k
+        ax.set_xlim(10, 1e4)
+        ax.set_title(rf"derivative order {k}")
+        ax.set_xlabel("Number of sample points")
+        ax.set_ylabel("Maximum absolute error")                      # every panel has its own scale
+        ax.grid(True, which="both", alpha=0.3)                       # light grid for reading slopes
+        ax.legend(loc="lower left")
+    fig.tight_layout()
+    return fig
+
+
+fig = derivative_study()
+plt.show()
+```
+
+Each derivative costs the b-series kernels one order of convergence: for `"b7"` to `"b13"`,
+6th order for the first derivative, 5th for the second and 4th for the third, and one order
+less for `"b5"`. Their rounding floor rises slowly with the number of samples, roughly in
+proportion to $n^k$ for the $k$-th derivative, which is unavoidable when differentiating
+sampled data. Chebyshev differentiation reaches its best accuracy with fewer samples, but its
+rounding grows about $n^2$ per derivative order: for the third derivative it becomes worse
+than no interpolation at all. The cubic spline converges at $4 - k$ for the $k$-th derivative,
+so its third derivative is piecewise constant.

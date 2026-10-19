@@ -202,8 +202,7 @@ precision.
 Extrapolation of high degree amplifies whatever is in the data near the boundary. With
 `bc="detect"`, the default, convinterp first checks whether the data there are smooth enough: it
 compares the $n$-th differences of the values near the boundary with their range, and falls back to
-linear extrapolation where the differences are too large. The [user guide](guide.qmd#boundary-conditions)
-shows an example.
+linear extrapolation where the differences are too large.
 
 The extrapolation sums have large alternating weights: for the farthest ghost value of `"b13"`,
 their magnitudes add up to about $10^6$. convinterp therefore computes them with a compensated dot

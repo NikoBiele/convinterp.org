@@ -1,0 +1,279 @@
+---
+title: "Integration"
+subtitle: "Definite integrals from samples"
+engine: julia
+---
+
+Integrals of sampled data, on uniform grids in one to three dimensions and from scattered
+points in 2D. The convolution interpolant's antiderivative is built once and a box integral is
+then four (or eight) evaluations by inclusion–exclusion; the alternatives are quadrature rules
+on the samples (NumericalIntegration.jl), and the exact integrals of spline interpolants
+(BSplineKit.jl, Dierckx.jl), applied along one axis at a time in more dimensions. For scattered
+points the comparison is a thin-plate radial basis interpolant integrated by adaptive cubature,
+since no package integrates scattered data directly.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages, the methods, and the test integrands"
+using ConvolutionInterpolations
+using NumericalIntegration           # integrate(x, y, rule): Trapezoidal, SimpsonEven, RombergEven
+using BSplineKit                     # interpolate(x, y, BSplineOrder(k)) and integral(spline)
+import Dierckx                       # qualified: Dierckx also exports `integrate`
+import ScatteredInterpolation        # qualified: also exports `interpolate`
+using HCubature, QuadGK              # reference integrals, and integration of the RBF interpolant
+using Chairmarks, Printf, Random, Plots
+default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+
+# 1D rules: each maps (x, y) on a uniform grid to the definite integral over [x[1], x[end]]
+trap_rule(x, y)    = integrate(x, y, Trapezoidal())    # 2nd order
+simpson_rule(x, y) = integrate(x, y, SimpsonEven())    # 4th order
+romberg_rule(x, y) = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do   # its convergence warnings are not the point here
+    integrate(x, y, RombergEven())                     # high order, needs n = 2^k + 1 points
+end
+
+function bspline_rule(k)                               # order-k B-spline interpolant, exact spline integral
+    return (x, y) -> begin
+        S = BSplineKit.interpolate(x, y, BSplineOrder(k))
+        I = integral(S)
+        return I(last(x)) - I(first(x))
+    end
+end
+
+function dierckx_rule(x, y)                            # FITPACK quintic spline, exact spline integral
+    spl = Dierckx.Spline1D(collect(x), collect(y); k = 5, s = 0.0)
+    return Dierckx.integrate(spl, first(x), last(x))
+end
+
+# a 1D rule lifted to N-D by integrating along one axis at a time
+function nested_integral(rule, axes::NTuple{N,<:AbstractVector}, A::AbstractArray{T,N}) where {T,N}
+    B = A
+    for d in N:-1:1
+        x = axes[d]
+        B = mapslices(v -> rule(x, v), B; dims = d)    # integrate every line along axis d
+        B = dropdims(B; dims = d)                      # that axis is gone now
+    end
+    return B[]                                         # 0-dimensional array -> scalar
+end
+
+function conv_query(F, lo, hi)                         # the integral over the box [lo, hi]
+    N = length(lo)
+    total = 0.0
+    for corner in Iterators.product(ntuple(_ -> (false, true), N)...)
+        pt = ntuple(d -> corner[d] ? hi[d] : lo[d], N)
+        sgn = isodd(N - count(corner)) ? -1.0 : 1.0
+        total += sgn * F(pt...)
+    end
+    return total
+end
+
+# the convolution interpolant: the iterated antiderivative once, then inclusion–exclusion over the corners
+function conv_box_integral(axes::NTuple{N,<:AbstractVector}, A::AbstractArray{T,N}; kernel = :b7) where {T,N}
+    grid = N == 1 ? axes[1] : axes
+    F = convolution_interpolation(grid, A; kernel = kernel, derivative = -1)
+    return conv_query(F, first.(axes), last.(axes))
+end
+
+methods = [
+    "Trapezoid"        => (axes, A) -> nested_integral(trap_rule, axes, A),
+    "Simpson"          => (axes, A) -> nested_integral(simpson_rule, axes, A),
+    "Romberg"          => (axes, A) -> nested_integral(romberg_rule, axes, A),
+    "Dierckx k=5"      => (axes, A) -> nested_integral(dierckx_rule, axes, A),
+    "BSplineKit k=4"   => (axes, A) -> nested_integral(bspline_rule(4), axes, A),
+    "BSplineKit k=8"   => (axes, A) -> nested_integral(bspline_rule(8), axes, A),
+    "ConvInterp :b7"   => (axes, A) -> conv_box_integral(axes, A; kernel = :b7),
+    "ConvInterp :b13"  => (axes, A) -> conv_box_integral(axes, A; kernel = :b13),
+]
+
+# the test integrands and their reference integrals
+g(x) = exp(x) * cos(4x) + 1 / (1 + 16 * (x - 0.4)^2)   # smooth, non-polynomial, non-periodic
+I_g = quadgk(g, 0.0, 1.0; rtol = 1e-14)[1]              # 1D reference
+f_sep(p...) = prod(g, p)                                # separable N-D integrand, reference I_g^N
+f2(x, y) = exp(-3 * (x - 0.4)^2 - 2 * (y - 0.6)^2) * cos(4 * x * y + y)   # non-separable 2D integrand
+I_f2 = hcubature(p -> f2(p[1], p[2]), [0.0, 0.0], [1.0, 1.0]; rtol = 1e-13)[1];
+```
+
+The integrands are $g(x) = e^x \cos 4x + 1/(1 + 16(x - 0.4)^2)$, products of it in more
+dimensions, and a non-separable Gaussian-times-cosine in 2D; the references come from adaptive
+quadrature at tolerance $10^{-13}$ and below.
+
+## Convergence
+
+The relative error of each method against the number of points per axis, on grids of
+$2^k + 1$ points so that Romberg's rule applies:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+function run_uniform(N, ns, methods, f, I_ref)
+    errs = Dict(name => Float64[] for name in first.(methods))
+    for n in ns
+        axes = ntuple(_ -> range(0.0, 1.0; length = n), N)
+        A = [f(p...) for p in Iterators.product(axes...)]
+        for (name, m) in methods
+            push!(errs[name], abs(m(axes, A) - I_ref) / abs(I_ref))
+        end
+    end
+    return errs
+end
+
+function convergence_plot(ns, errs, methods; title)
+    p = plot(; xscale = :log10, yscale = :log10, xlabel = "points per axis", ylabel = "relative error",
+             title = title, legend = :bottomleft, minorgrid = true, titlefontsize = 11, legendfontsize = 7)
+    for (name, _) in methods
+        plot!(p, ns, max.(errs[name], 1e-17); marker = :circle, markersize = 3, label = name)
+    end
+    return p
+end
+
+ns_1d = [9, 17, 33, 65, 129, 257]
+ns_2d = [9, 17, 33, 65, 129]
+ns_3d = [9, 17, 33, 65]                                # 65³ = 274 625 samples, the most expensive case
+
+errs_1d = run_uniform(1, ns_1d, methods, f_sep, I_g^1)
+errs_2d = run_uniform(2, ns_2d, methods, f_sep, I_g^2)
+errs_3d = run_uniform(3, ns_3d, methods, f_sep, I_g^3)
+errs_2n = run_uniform(2, ns_2d, methods, f2, I_f2)
+
+plot(convergence_plot(ns_1d, errs_1d, methods; title = "1D, separable"),
+     convergence_plot(ns_2d, errs_2d, methods; title = "2D, separable"),
+     convergence_plot(ns_3d, errs_3d, methods; title = "3D, separable"),
+     convergence_plot(ns_2d, errs_2n, methods; title = "2D, non-separable");
+     layout = (2, 2), size = (900, 720))
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+# the observed order between the two finest grids of each case, for every method
+function observed(errs, ns, name)
+    e = errs[name]
+    h1, h2 = 1 / (ns[end-1] - 1), 1 / (ns[end] - 1)
+    return log(max(e[end-1], 1e-17) / max(e[end], 1e-17)) / log(h1 / h2)
+end
+cases = [("1D", errs_1d, ns_1d), ("2D", errs_2d, ns_2d), ("3D", errs_3d, ns_3d), ("2D non-separable", errs_2n, ns_2d)]
+println("| Observed order | ", join(first.(cases), " | "), " |")
+println("|:--|", "--:|"^length(cases))
+for (name, _) in methods
+    println("| ", name, " | ", join((@sprintf("%.2f", observed(e, n, name)) for (_, e, n) in cases), " | "), " |")
+end
+```
+
+An order near zero on the finest grids means the method has reached rounding, not that it has
+stopped converging; the curves show which.
+
+## Scattered points
+
+Points scattered in the unit square, the non-separable integrand sampled at them without
+noise, and the integral over the points' bounding box. The convolution route is the exact
+scattered fit with `derivative = -1`, which gives the antiderivative interpolant directly; the
+alternative is a thin-plate radial basis interpolant integrated by adaptive cubature, which
+costs a dense solve and one interpolant evaluation per cubature point:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The scattered-data comparison"
+function scattered_comparison(f, n_list; seed = 1)
+    rng = MersenneTwister(seed)
+    rows = NamedTuple[]
+    for npts in n_list
+        pts = rand(rng, 2, npts)                                   # columns are points in [0, 1]²
+        vals = [f(pts[1, i], pts[2, i]) for i in 1:npts]
+        lo = [minimum(pts[1, :]), minimum(pts[2, :])]
+        hi = [maximum(pts[1, :]), maximum(pts[2, :])]
+        I_ref = hcubature(p -> f(p[1], p[2]), lo, hi; rtol = 1e-13)[1]
+
+        t0 = time_ns()
+        F = convolution_interpolation(pts, vals; mode = :exact, derivative = -1)
+        I_conv = conv_query(F, lo, hi)
+        t_conv = (time_ns() - t0) / 1e9
+
+        t0 = time_ns()
+        rbf = ScatteredInterpolation.interpolate(ScatteredInterpolation.ThinPlate(), pts, vals)
+        I_rbf = hcubature(p -> ScatteredInterpolation.evaluate(rbf, reshape(p, 2, 1))[1],
+                          lo, hi; rtol = 1e-10, maxevals = 500_000)[1]
+        t_rbf = (time_ns() - t0) / 1e9
+
+        push!(rows, (n = npts, e_conv = abs(I_conv - I_ref) / abs(I_ref), t_conv = t_conv,
+                     e_rbf = abs(I_rbf - I_ref) / abs(I_ref), t_rbf = t_rbf))
+    end
+    return rows
+end
+scattered_rows = scattered_comparison(f2, [500, 1000, 2000]);
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| points | ConvInterp error | ConvInterp time | thin-plate RBF + cubature error | RBF time |")
+println("|--:|--:|--:|--:|--:|")
+for r in scattered_rows
+    @printf("| %d | %.1e | %.2f s | %.1e | %.2f s |\n", r.n, r.e_conv, r.t_conv, r.e_rbf, r.t_rbf)
+end
+```
+
+## Setup and query
+
+The antiderivative interpolant is built once; after that a definite integral over any sub-box
+is a few evaluations, independent of the grid size. Of the alternatives, BSplineKit (1D) and
+Dierckx's `Spline2D` (2D) have a comparable split between setup and query; the quadrature
+rules have no reusable setup, and integrate grid-aligned boxes only.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings"
+function timing_rows(N, ns, f; kernel = :b7)
+    rng = MersenneTwister(2)
+    rows = NamedTuple[]
+    for n in ns
+        axes = ntuple(_ -> range(0.0, 1.0; length = n), N)
+        A = [f(p...) for p in Iterators.product(axes...)]
+        grid = N == 1 ? axes[1] : axes
+        lo = ntuple(_ -> 0.1 + 0.3 * rand(rng), N)     # one random sub-box, shared by every method
+        hi = ntuple(_ -> 0.6 + 0.3 * rand(rng), N)
+
+        t_setup = (@b convolution_interpolation($grid, $A; kernel = $kernel, derivative = -1)).time
+        F = convolution_interpolation(grid, A; kernel = kernel, derivative = -1)
+        t_query = (@b conv_query($F, $lo, $hi)).time
+
+        t_s = t_q = NaN
+        if N == 1
+            x = axes[1]
+            t_s = (@b integral(BSplineKit.interpolate($x, $A, BSplineOrder(8)))).time
+            I = integral(BSplineKit.interpolate(x, A, BSplineOrder(8)))
+            t_q = (@b $I($(hi[1])) - $I($(lo[1]))).time
+        elseif N == 2
+            x, y = collect(axes[1]), collect(axes[2])
+            t_s = (@b Dierckx.Spline2D($x, $y, $A; kx = 5, ky = 5, s = 0.0)).time
+            spl = Dierckx.Spline2D(x, y, A; kx = 5, ky = 5, s = 0.0)
+            t_q = (@b Dierckx.integrate($spl, $(lo[1]), $(hi[1]), $(lo[2]), $(hi[2]))).time
+        end
+        push!(rows, (n = n, t_setup = t_setup, t_query = t_query, t_s = t_s, t_q = t_q))
+    end
+    return rows
+end
+timings = [(1, "BSplineKit k=8", timing_rows(1, ns_1d, f_sep)),
+           (2, "Dierckx k=5", timing_rows(2, ns_2d, f_sep)),
+           (3, "", timing_rows(3, ns_3d, f_sep))];
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+fmt(t) = isnan(t) ? "—" :
+         t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1    ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t)
+for (N, other, rows) in timings
+    println("\n**$(N)D**, kernel `:b7`", isempty(other) ? " (no competitor with a reusable setup)" : " against $other", "\n")
+    println("| points per axis | ConvInterp setup | ConvInterp query | $(isempty(other) ? "" : other * " setup") | $(isempty(other) ? "" : other * " query") |")
+    println("|--:|--:|--:|--:|--:|")
+    for r in rows
+        println("| ", r.n, " | ", fmt(r.t_setup), " | ", fmt(r.t_query), " | ", fmt(r.t_s), " | ", fmt(r.t_q), " |")
+    end
+end
+```
+
+The query column is the point: once the interpolant exists, an integral over any box costs
+microseconds whatever the grid, in any dimension. The setup grows with the grid, as any
+interpolant's does, and the 3D rows show it is still the only route with a reusable setup
+there.

@@ -185,5 +185,5 @@ mode-dependent defaults (lower for `:smooth`, where the penalty does the regular
 for `:exact` in two or more dimensions, where random points share cells more often);
 `gridsize` fixes the knot count outright. Both modes warn when the grid is the limit: `:exact`
 when the points could not all be matched, `:smooth` when the fitted smoothing would need a
-finer grid than the budget allows. The [scattered-data benchmark](../benchmarks/scattered.qmd)
+finer grid than the budget allows. The [scattered-data benchmark](../benchmarks/julia/scattered.qmd)
 has the convergence of both modes with the point count, and timings.

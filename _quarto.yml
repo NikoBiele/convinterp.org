@@ -47,24 +47,34 @@ website:
             text: Smoothing
           - href: concepts/scattered.qmd
             text: Scattered data
-      - section: Benchmarks
+      - section: Julia benchmarks
         contents:
-          - href: benchmarks/index.qmd
+          - href: benchmarks/julia/index.qmd
             text: Overview and method
-          - href: benchmarks/interpolation.qmd
+          - href: benchmarks/julia/interpolation.qmd
             text: Interpolation
-          - href: benchmarks/derivatives.qmd
+          - href: benchmarks/julia/derivatives.qmd
             text: Derivatives
-          - href: benchmarks/integration.qmd
+          - href: benchmarks/julia/integration.qmd
             text: Integration
-          - href: benchmarks/nonuniform.qmd
+          - href: benchmarks/julia/nonuniform.qmd
             text: Nonuniform grids
-          - href: benchmarks/smoothing.qmd
+          - href: benchmarks/julia/smoothing.qmd
             text: Smoothing
-          - href: benchmarks/scattered.qmd
+          - href: benchmarks/julia/scattered.qmd
             text: Scattered data
-          - href: benchmarks/high-dimensions.qmd
+          - href: benchmarks/julia/high-dimensions.qmd
             text: High dimensions
+      - section: Python benchmarks
+        contents:
+          - href: benchmarks/python/index.qmd
+            text: Overview and method
+          - href: benchmarks/python/interpolation.qmd
+            text: Interpolation
+          - href: benchmarks/python/derivatives.qmd
+            text: Derivatives
+          - href: benchmarks/python/integration.qmd
+            text: Integration
       - href: theory.qmd
         text: Theory
       - section: Julia

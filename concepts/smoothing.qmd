@@ -173,5 +173,5 @@ On the knots it agrees with `convolution_smooth`:
 
 Both lose some accuracy near the boundaries, where the ghost values are extrapolated from noisy
 data; that is a property of any local method, not of the kernel. The
-[smoothing benchmark](../benchmarks/smoothing.qmd) compares both with the alternatives, in
+[smoothing benchmark](../benchmarks/julia/smoothing.qmd) compares both with the alternatives, in
 accuracy and in time, across noise levels and signal frequencies.

@@ -1,7 +1,32 @@
 ---
 title: "convinterp"
 subtitle: "High-order convolution interpolation, differentiation, integration and smoothing on grids and scattered data — in Julia and Python"
+engine: julia
 ---
+
+```{julia}
+#| echo: false
+using ConvolutionInterpolations, Plots
+default(framestyle = :box, fontfamily = "sans-serif", legend = :bottomleft, legendfontsize = 7, titlefontsize = 10)
+f(x) = cos(x^2 / 9)                                               # a chirp: slow on the left, fast on the right
+x_data = range(0, 10, length = 9)                                 # nine samples
+y_data = f.(x_data)
+x_fine = range(0, 10, length = 1000)
+
+function panel(kernels, title)
+    p = scatter(x_data, y_data, label = "samples", markersize = 5, markercolor = :white, markerstrokewidth = 1.5)
+    for k in kernels
+        itp = convolution_interpolation(x_data, y_data; kernel = k)   # the interpolant with this kernel
+        plot!(p, x_fine, itp.(x_fine), label = "kernel = :$k", linewidth = 1.2)
+    end
+    plot!(p, x_fine, f.(x_fine), label = "true function", color = :black, linewidth = 1.5)
+    plot!(p, title = title, xlabel = "x")
+end
+
+plot(panel((:a0, :a1, :a3, :a4, :a5, :a7), "lower-order kernels"),
+     panel((:b5, :b7, :b9, :b11, :b13), "higher-order kernels");
+     layout = (1, 2), size = (900, 360))
+```
 
 convinterp is one method in two languages. Data sampled on a grid, uniform or not, in one
 dimension or many, are interpolated by convolution with a piecewise-polynomial kernel; the

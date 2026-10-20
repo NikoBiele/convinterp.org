@@ -5,8 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+using ConvolutionInterpolations, CairoMakie, Printf
 ```
 
 Near the ends of the data, a kernel's stencil reaches beyond the last knot: `:b7` combines twelve
@@ -43,12 +42,15 @@ xs = range(0, 1, length = 21)                             # 21 knots on [0, 1]
 ys = sin.(3xs) .+ (xs .> 0.83)                            # smooth data with a step near the right end
 t = range(0.5, 1, length = 801)                           # fine points on the right half
 
-plot(xlabel = "x", legend = :topleft)
+fig = Figure(size = (800, 400))
+ax = Axis(fig[1, 1]; xlabel = "x", limits = ((0.5, 1), nothing))   # the right half only
 for (bc, style) in ((:poly, :solid), (:linear, :solid), (:detect, :dash))
     itp_bc = convolution_interpolation(xs, ys; bc = bc)   # the same data, three boundary conditions
-    plot!(t, itp_bc.(t), linestyle = style, label = "bc = :$bc")
+    lines!(ax, t, itp_bc.(t); linestyle = style, label = "bc = :$bc")
 end
-scatter!(xs, ys, markercolor = :white, markerstrokewidth = 1.5, label = "data", xlims = (0.5, 1))
+scatter!(ax, xs, ys; markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5, label = "data")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ## Python

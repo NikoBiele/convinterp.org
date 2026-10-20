@@ -5,8 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf
-default(size = (720, 400), linewidth = 2, framestyle = :box, legend = :topright, fontfamily = "sans-serif")
+using ConvolutionInterpolations, CairoMakie, Printf
 ```
 
 Convolution interpolation builds a function from data on a grid by placing a copy of a kernel at
@@ -27,14 +26,18 @@ A sine sampled sparsely, interpolated with the default kernel, in both packages:
 ## Julia
 
 ```{julia}
-x = range(0, 2π, length = 8)                              # eight uniformly spaced samples
+x = range(0, 2π, length = 6)                              # six uniformly spaced samples
 y = sin.(x)                                               # the values at the samples
 itp = convolution_interpolation(x, y)                     # the interpolant, default kernel :b7
 
 xf = range(0, 2π, length = 400)                           # fine points for plotting
-plot(xf, sin.(xf), color = :black, label = "sin(x)")      # the function being sampled
-plot!(xf, itp.(xf), label = "interpolant")                # the interpolant between the samples
-scatter!(x, y, markershape = :circle, markercolor = :white, markerstrokewidth = 1.5, label = "samples")
+fig = Figure(size = (800, 400))
+ax = Axis(fig[1, 1]; xlabel = "x")
+lines!(ax, xf, itp.(xf); label = "interpolant")           # the interpolant between the samples
+lines!(ax, xf, sin.(xf); color = :black, label = "sin(x)")   # the function being sampled
+scatter!(ax, x, y; markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5, label = "samples")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ## Python
@@ -44,13 +47,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from convinterp import convolution_interpolation
 
-x = np.linspace(0.0, 2 * np.pi, 8)                        # eight uniformly spaced samples
+x = np.linspace(0.0, 2 * np.pi, 6)                        # six uniformly spaced samples
 y = np.sin(x)                                             # the values at the samples
 itp = convolution_interpolation(x, y)                     # the interpolant, default kernel "b7"
 
 xf = np.linspace(0.0, 2 * np.pi, 400)                     # fine points for plotting
-plt.plot(xf, np.sin(xf), "k", label="sin(x)")             # the function being sampled
 plt.plot(xf, itp(xf), label="interpolant")                # the interpolant between the samples
+plt.plot(xf, np.sin(xf), "k", label="sin(x)")             # the function being sampled
 plt.plot(x, y, "o", mfc="white", label="samples")         # the samples themselves
 plt.legend()
 ```
@@ -60,8 +63,9 @@ the same.
 
 :::
 
-Eight samples per period is a coarse sampling for a sine, and the interpolant is already close;
-the next section shows how the error falls as samples are added.
+Six samples per period is a coarse sampling for a sine, and the interpolant visibly departs from
+it between the samples; the convergence section below shows how the error falls as samples are
+added.
 
 ```{julia}
 #| echo: false
@@ -130,12 +134,15 @@ errors = [begin
               maximum(abs.(itp_k.(xr) .- runge.(xr)))    # the largest error on the fine points
           end for n in ns, k in kernels]
 
-plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
-     legend = :bottomleft, xflip = true)
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
+          xlabel = "spacing h", ylabel = "largest error")
 for (j, k) in enumerate(kernels)
-    plot!(hs, errors[:, j], marker = :circle, label = string(k))
+    scatterlines!(ax, hs, max.(errors[:, j], 1e-17); markersize = 8, label = string(k))
 end
-plot!(hs, errors[end, end] .* (hs ./ hs[end]) .^ 7, color = :black, linestyle = :dash, label = "slope 7")
+lines!(ax, hs, errors[end, end] .* (hs ./ hs[end]) .^ 7; color = :black, linestyle = :dash, label = "slope 7")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ```{julia}
@@ -179,9 +186,12 @@ xf2 = range(-1, 1, length = 200)                          # fine x values
 yf2 = range(-1, 1, length = 200)                          # fine y values
 fine = [itp2(xi, yi) for xi in xf2, yi in yf2]            # the interpolant on the fine grid
 
-p1 = heatmap(xg, yg, field', title = "data, 12 × 10", aspect_ratio = 1, colorbar = false)
-p2 = heatmap(xf2, yf2, fine', title = "interpolant, 200 × 200", aspect_ratio = 1, colorbar = false)
-plot(p1, p2, layout = (1, 2), size = (800, 380))
+fig = Figure(size = (800, 380))
+ax1 = Axis(fig[1, 1]; title = "data, 12 × 10", aspect = DataAspect())
+heatmap!(ax1, xg, yg, field)
+ax2 = Axis(fig[1, 2]; title = "interpolant, 200 × 200", aspect = DataAspect())
+heatmap!(ax2, xf2, yf2, fine)
+fig
 ```
 
 ## Python
@@ -260,3 +270,28 @@ Near the ends of the data the stencil reaches beyond the last knot. The packages
 positions by extrapolating the data, polynomially where the data allow it, which keeps the full
 order up to the boundary; the [boundaries page](boundaries.qmd) shows the choices and when they
 matter.
+
+## Limitations
+
+The high orders assume smooth, well-resolved data. Where that doesn't hold, the kernels behave
+like any high-order interpolation:
+
+- **Features near the grid resolution are damped.** Oscillations faster than about half the
+  Nyquist frequency — fewer than about four knots per period — are attenuated, and close to
+  the Nyquist frequency the high-order kernels are no more accurate than a cubic spline.
+- **Jumps ring, and kinks aren't sharpened.** At a discontinuity the interpolant overshoots,
+  much like a cubic spline, and at a kink the higher orders don't help. Linear interpolation
+  (`:a1`) doesn't overshoot.
+- **Monotonicity and positivity aren't preserved.** Between the knots, the interpolant of
+  monotone or positive data can overshoot. Where these must hold, use `:a1` or a
+  shape-preserving method.
+- **Noise isn't removed.** The interpolant passes through every data value, noise included, and
+  derivatives amplify noise however high the order: for noisy measurements, smooth first — the
+  [smoothing page](smoothing.qmd) has the tools.
+- **Polynomial boundaries need enough data.** `:poly` and `:detect` need at least four knots
+  along an axis for `:a3` to `:a7`, six for `:b5` and eight for `:b7` to `:b13`. With fewer,
+  the boundaries fall back to linear extrapolation, and the kernel's full order isn't reached
+  there.
+- **`:detect` is a heuristic.** It tests how smooth the data are near each boundary. It
+  reliably falls back to linear for noisy or rough boundary data, but a single outlier at the
+  very end can pass as smooth. When you know your data, choose `bc` explicitly.

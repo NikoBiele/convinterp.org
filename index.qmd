@@ -6,26 +6,25 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots
-default(framestyle = :box, fontfamily = "sans-serif", legend = :bottomleft, legendfontsize = 7, titlefontsize = 10)
+using ConvolutionInterpolations, CairoMakie
 f(x) = cos(x^2 / 9)                                               # a chirp: slow on the left, fast on the right
 x_data = range(0, 10, length = 9)                                 # nine samples
 y_data = f.(x_data)
 x_fine = range(0, 10, length = 1000)
 
-function panel(kernels, title)
-    p = scatter(x_data, y_data, label = "samples", markersize = 5, markercolor = :white, markerstrokewidth = 1.5)
+fig = Figure(size = (840, 380))
+for (i, (kernels, title)) in enumerate((((:a0, :a1, :a3, :a4, :a5, :a7), "lower-order kernels"),
+                                         ((:b5, :b7, :b9, :b11, :b13), "higher-order kernels")))
+    ax = Axis(fig[1, i]; title = title, xlabel = "x")
     for k in kernels
         itp = convolution_interpolation(x_data, y_data; kernel = k)   # the interpolant with this kernel
-        plot!(p, x_fine, itp.(x_fine), label = "kernel = :$k", linewidth = 1.2)
+        lines!(ax, x_fine, itp.(x_fine); linewidth = 1.2, label = "kernel = :$k")
     end
-    plot!(p, x_fine, f.(x_fine), label = "true function", color = :black, linewidth = 1.5)
-    plot!(p, title = title, xlabel = "x")
+    lines!(ax, x_fine, f.(x_fine); color = :black, linewidth = 1.5, label = "true function")
+    scatter!(ax, x_data, y_data; markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5, label = "samples")
+    axislegend(ax; position = :lb, labelsize = 11, rowgap = 0, patchsize = (16, 8))
 end
-
-plot(panel((:a0, :a1, :a3, :a4, :a5, :a7), "lower-order kernels"),
-     panel((:b5, :b7, :b9, :b11, :b13), "higher-order kernels");
-     layout = (1, 2), size = (900, 360))
+fig
 ```
 
 convinterp is one method in two languages. Data sampled on a grid, uniform or not, in one

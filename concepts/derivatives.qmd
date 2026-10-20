@@ -5,8 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+using ConvolutionInterpolations, CairoMakie, Printf
 ```
 
 The interpolant is a sum of polynomial pieces, so its derivatives are polynomial pieces too,
@@ -91,11 +90,14 @@ errors = [begin
               maximum(abs.(itp_m.(xr) .- exact[m+1].(xr)))
           end for n in ns, m in orders]
 
-plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
-     legend = :bottomleft, xflip = true)
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
+          xlabel = "spacing h", ylabel = "largest error")
 for m in orders
-    plot!(hs, errors[:, m+1], marker = :circle, label = "derivative $m")
+    scatterlines!(ax, hs, max.(errors[:, m+1], 1e-17); markersize = 8, label = "derivative $m")
 end
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ```{julia}

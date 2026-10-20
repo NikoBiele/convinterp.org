@@ -1,0 +1,212 @@
+---
+title: "Interpolation"
+subtitle: "ConvolutionInterpolations.jl against Interpolations.jl, BSplineKit.jl and Dierckx.jl"
+engine: julia
+---
+
+Interpolation of a difficult function from uniformly spaced samples: the convolution kernels
+against the cubic B-spline of Interpolations.jl, the B-spline interpolants of BSplineKit.jl at
+cubic and high order, and the quintic FITPACK spline of Dierckx.jl. First the accuracy as the
+grid is refined, then the time to construct an interpolant and the time to evaluate it, in one
+and two dimensions, and finally the two together: the time each method needs to reach a given
+accuracy.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages and the methods"
+using ConvolutionInterpolations
+import Interpolations                # qualified: exports `interpolate`, as BSplineKit does
+import BSplineKit
+import Dierckx
+using Chairmarks, Printf, Random, CairoMakie
+
+# each method maps (x, y) on a uniform grid to a callable interpolant
+methods_1d = [
+    "Interpolations.jl cubic" => (x, y) -> Interpolations.scale(
+        Interpolations.interpolate(y, Interpolations.BSpline(Interpolations.Cubic(Interpolations.Line(Interpolations.OnGrid())))), x),
+    "BSplineKit k=4"          => (x, y) -> BSplineKit.interpolate(x, y, BSplineKit.BSplineOrder(4)),
+    "BSplineKit k=8"          => (x, y) -> BSplineKit.interpolate(x, y, BSplineKit.BSplineOrder(8)),
+    "Dierckx k=5"             => (x, y) -> Dierckx.Spline1D(collect(x), collect(y); k = 5),
+    "ConvInterp :a4"          => (x, y) -> convolution_interpolation(x, y; kernel = :a4),
+    "ConvInterp :b5"          => (x, y) -> convolution_interpolation(x, y; kernel = :b5),
+    "ConvInterp :b7"          => (x, y) -> convolution_interpolation(x, y; kernel = :b7),
+]
+
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+xr = range(-1, 1, length = 2001);                         # fine points for measuring the error
+```
+
+## Convergence
+
+The largest error against Runge's function on the fine points, as the number of samples
+doubles:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+ns = [21, 41, 81, 161, 321, 641, 1281]
+hs = 2 ./ (ns .- 1)
+errs = Dict(name => Float64[] for (name, _) in methods_1d)
+for n in ns
+    x = range(-1, 1, length = n)
+    y = runge.(x)
+    for (name, m) in methods_1d
+        itp = m(x, y)
+        push!(errs[name], maximum(abs.(itp.(xr) .- runge.(xr))))
+    end
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
+                     xlabel = "spacing h", ylabel = "largest error")
+for (name, _) in methods_1d
+    scatterlines!(ax, hs, max.(errs[name], 1e-17); markersize = 8, label = name)
+end
+lines!(ax, hs, errs["ConvInterp :b7"][end] .* (hs ./ hs[end]) .^ 7; color = :black, linestyle = :dash, label = "slope 7")
+Legend(fig[1, 2], ax)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+# the observed order between the two finest grids still clear of rounding
+println("| | observed order | error at the finest grid |")
+println("|:--|--:|--:|")
+for (name, _) in methods_1d
+    e = errs[name]
+    i = findlast(v -> v > 1e-13, e); i = max(i, 2)
+    @printf("| %s | %.2f | %.1e |\n", name, log(e[i-1] / e[i]) / log(hs[i-1] / hs[i]), e[end])
+end
+```
+
+The cubic methods — Interpolations.jl, BSplineKit at order 4, and `:a4` — converge at 4th
+order; Dierckx's quintic at 6th, as does `:b5`; BSplineKit at order 8 and `:b7` at 7th. The
+difference between the last two is not the order but what it costs, which the timings show.
+
+## Setup and query
+
+Construction time for a grid of a thousand samples, and evaluation time per point at a million
+random points, each interpolant built once and evaluated in one broadcast:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The 1D timings"
+rng = MersenneTwister(1)
+n1 = 1000
+x1 = range(-1, 1, length = n1)
+y1 = runge.(x1)
+p1 = rand(rng, 1_000_000) .* 1.98 .- 0.99                  # a million random points inside the grid
+
+rows_1d = map(methods_1d) do (name, m)
+    t_setup = (@b $m($x1, $y1)).time
+    itp = m(x1, y1)
+    t_query = (@b $itp.($p1)).time / length(p1)
+    (name = name, t_setup = t_setup, t_query = t_query)
+end;
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1    ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t)
+println("| | setup, 1000 samples | query, per point |")
+println("|:--|--:|--:|")
+for r in rows_1d
+    println("| ", r.name, " | ", fmt(r.t_setup), " | ", fmt(r.t_query), " |")
+end
+```
+
+In two dimensions, a 200 × 200 grid and two hundred thousand random points. Interpolations.jl
+and Dierckx have tensor-product interpolants; BSplineKit's are one-dimensional, so it is not
+in this table:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The 2D timings"
+n2 = 200
+x2 = range(-1, 1, length = n2)
+y2 = range(-1, 1, length = n2)
+z2 = [runge(xi) * runge(yi) for xi in x2, yi in y2]
+px = rand(rng, 200_000) .* 1.98 .- 0.99
+py = rand(rng, 200_000) .* 1.98 .- 0.99
+
+methods_2d = [
+    "Interpolations.jl cubic" => () -> Interpolations.scale(
+        Interpolations.interpolate(z2, Interpolations.BSpline(Interpolations.Cubic(Interpolations.Line(Interpolations.OnGrid())))), x2, y2),
+    "Dierckx k=5"             => () -> Dierckx.Spline2D(collect(x2), collect(y2), z2; kx = 5, ky = 5),
+    "ConvInterp :a4"          => () -> convolution_interpolation((x2, y2), z2; kernel = :a4),
+    "ConvInterp :b5"          => () -> convolution_interpolation((x2, y2), z2; kernel = :b5),
+    "ConvInterp :b7"          => () -> convolution_interpolation((x2, y2), z2; kernel = :b7),
+]
+
+rows_2d = map(methods_2d) do (name, m)
+    t_setup = (@b $m()).time
+    itp = m()
+    t_query = if itp isa Dierckx.Spline2D
+        (@b Dierckx.evaluate($itp, $px, $py)).time / length(px)   # Dierckx evaluates point lists through `evaluate`
+    else
+        (@b $itp.($px, $py)).time / length(px)
+    end
+    (name = name, t_setup = t_setup, t_query = t_query)
+end;
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | setup, 200 × 200 samples | query, per point |")
+println("|:--|--:|--:|")
+for r in rows_2d
+    println("| ", r.name, " | ", fmt(r.t_setup), " | ", fmt(r.t_query), " |")
+end
+```
+
+The convolution interpolants compute nothing at construction beyond the boundary values, and
+evaluate in a fixed number of operations per point — the stencil's — whatever the grid size,
+with the cell located by one division per axis. A B-spline interpolant solves a banded system
+at construction and searches for the cell at evaluation; a FITPACK spline does both in Fortran.
+The tables show where each trade lands.
+
+## Time to accuracy
+
+When the samples are given, the convergence plot is the measure: the error at that grid is what
+you get. When the sampling is yours to choose — a table you generate, output you resample — the
+question becomes which method reaches a given accuracy in the least time, and a finer grid is
+allowed if it pays. The work–precision diagram puts the two together: for each method and each
+grid of the convergence study, the time to construct the interpolant and evaluate it at a
+hundred thousand points, against the error on that grid. A curve further left reaches the same
+accuracy in less time.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The work–precision study"
+pw = rand(rng, 100_000) .* 1.98 .- 0.99                   # the evaluation workload
+times = Dict(name => Float64[] for (name, _) in methods_1d)
+for n in ns
+    x = range(-1, 1, length = n)
+    y = runge.(x)
+    for (name, m) in methods_1d
+        push!(times[name], (@b begin itp = $m($x, $y); itp.($pw) end).time)
+    end
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10,
+          xlabel = "time to construct and evaluate at 10⁵ points [s]", ylabel = "largest error")
+for (name, _) in methods_1d
+    scatterlines!(ax, times[name], max.(errs[name], 1e-17); markersize = 8, label = name)
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+Each curve descends as its grid refines, and the curves are nearly vertical: at a hundred
+thousand evaluations the time is the evaluation, for every method, and a finer grid costs
+almost nothing. A method's position left to right is therefore its cost per point, and the
+depth of its curve is how far its order takes it. The spline of order 8 needs fewer samples
+than `:b7` for a given error and reaches rounding later; the cubic B-spline and `:b5` cost the
+same per point, and `:b5` goes five decades deeper. The kernels are first to any accuracy down
+to rounding, which is the trade they were designed for.

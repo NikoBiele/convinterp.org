@@ -5,8 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+using ConvolutionInterpolations, CairoMakie, Printf
 ```
 
 On a uniform grid every kernel copy is the same polynomial, shifted. On a nonuniform grid the
@@ -49,11 +48,15 @@ d1 = convolution_interpolation(x, y; kernel = :b7, derivative = 1)   # its first
 d2 = convolution_interpolation(x, y; kernel = :b7, derivative = 2)   # its second derivative
 
 xf = range(0, 10, length = 600)                           # fine points for plotting
-plot(xf, f.(xf), color = :black, label = "f", xlabel = "x")
-plot!(xf, itp.(xf), label = "interpolant")
-plot!(xf, d1.(xf), label = "first derivative")
-plot!(xf, d2.(xf), label = "second derivative")
-scatter!(x, y, markercolor = :white, markerstrokewidth = 1.5, label = "knots")
+fig = Figure(size = (800, 400))
+ax = Axis(fig[1, 1]; xlabel = "x")
+lines!(ax, xf, itp.(xf); label = "interpolant")
+lines!(ax, xf, d1.(xf); label = "first derivative")
+lines!(ax, xf, d2.(xf); label = "second derivative")
+lines!(ax, xf, f.(xf); color = :black, label = "f")
+scatter!(ax, x, y; markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5, label = "knots")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ```{julia}
@@ -78,7 +81,7 @@ every spacing, and Runge's function is interpolated with four kernels:
 runge(x) = 1 / (1 + 25x^2)                                # Runge's function
 grade(u) = u + 0.3 * sin(π * u) / π                       # a monotone map of [−1, 1] onto itself, dense near the centre
 xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
-kernels = (:n3, :b5, :b7, :b9)
+kernels = (:n3, :b5, :b7, :b9, :b11)
 ns = [41, 81, 161, 321, 641]                              # the numbers of knots
 hs = 2 ./ (ns .- 1)                                       # the spacings of the uniform grid before grading
 
@@ -88,11 +91,14 @@ errors = [begin
               maximum(abs.(itp_k.(xr) .- runge.(xr)))
           end for n in ns, k in kernels]
 
-plot(xscale = :log10, yscale = :log10, xlabel = "mean spacing h", ylabel = "largest error",
-     legend = :bottomleft, xflip = true)
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
+          xlabel = "mean spacing h", ylabel = "largest error")
 for (j, k) in enumerate(kernels)
-    plot!(hs, errors[:, j], marker = :circle, label = string(k))
+    scatterlines!(ax, hs, max.(errors[:, j], 1e-17); markersize = 8, label = string(k))
 end
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ```{julia}

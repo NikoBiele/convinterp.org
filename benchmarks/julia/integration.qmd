@@ -21,8 +21,7 @@ using BSplineKit                     # interpolate(x, y, BSplineOrder(k)) and in
 import Dierckx                       # qualified: Dierckx also exports `integrate`
 import ScatteredInterpolation        # qualified: also exports `interpolate`
 using HCubature, QuadGK              # reference integrals, and integration of the RBF interpolant
-using Chairmarks, Printf, Random, Plots
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+using Chairmarks, Printf, Random, CairoMakie
 
 # 1D rules: each maps (x, y) on a uniform grid to the definite integral over [x[1], x[end]]
 trap_rule(x, y)    = integrate(x, y, Trapezoidal())    # 2nd order
@@ -116,15 +115,6 @@ function run_uniform(N, ns, methods, f, I_ref)
     return errs
 end
 
-function convergence_plot(ns, errs, methods; title)
-    p = plot(; xscale = :log10, yscale = :log10, xlabel = "points per axis", ylabel = "relative error",
-             title = title, legend = :bottomleft, minorgrid = true, titlefontsize = 11, legendfontsize = 7)
-    for (name, _) in methods
-        plot!(p, ns, max.(errs[name], 1e-17); marker = :circle, markersize = 3, label = name)
-    end
-    return p
-end
-
 ns_1d = [9, 17, 33, 65, 129, 257]
 ns_2d = [9, 17, 33, 65, 129]
 ns_3d = [9, 17, 33, 65]                                # 65³ = 274 625 samples, the most expensive case
@@ -134,11 +124,18 @@ errs_2d = run_uniform(2, ns_2d, methods, f_sep, I_g^2)
 errs_3d = run_uniform(3, ns_3d, methods, f_sep, I_g^3)
 errs_2n = run_uniform(2, ns_2d, methods, f2, I_f2)
 
-plot(convergence_plot(ns_1d, errs_1d, methods; title = "1D, separable"),
-     convergence_plot(ns_2d, errs_2d, methods; title = "2D, separable"),
-     convergence_plot(ns_3d, errs_3d, methods; title = "3D, separable"),
-     convergence_plot(ns_2d, errs_2n, methods; title = "2D, non-separable");
-     layout = (2, 2), size = (900, 720))
+cases = [("1D, separable", ns_1d, errs_1d), ("2D, separable", ns_2d, errs_2d),
+         ("3D, separable", ns_3d, errs_3d), ("2D, non-separable", ns_2d, errs_2n)]
+fig = Figure(size = (800, 1200))
+for (i, (title, ns, errs)) in enumerate(cases)
+    ax = Axis(fig[i, 1]; xscale = log10, yscale = log10, title = title,
+              xlabel = "points per axis", ylabel = "relative error")
+    for (name, _) in methods
+        scatterlines!(ax, ns, max.(errs[name], 1e-17); markersize = 8, label = name)
+    end
+    Legend(fig[i, 2], ax)
+end
+fig
 ```
 
 ```{julia}

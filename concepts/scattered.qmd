@@ -5,9 +5,8 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf, Random
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
-rms(v) = sqrt(sum(abs2, v) / length(v))                   # root mean square, used throughout
+using ConvolutionInterpolations, CairoMakie, Printf, Random
+rms(v) = sqrt(sum(abs2, v) / length(v));                  # root mean square, used throughout
 ```
 
 Measurements rarely come on a grid. The Julia package handles scattered points by fitting a
@@ -47,7 +46,7 @@ noisy = vals .+ σ .* randn(800)                           # measured with noise
 knots, grid, info = fit_scattered(pts, noisy)             # the fitted grid, smoothing chosen by cross-validation
 itp = convolution_interpolation(knots, grid; kernel = :a4, bc = :poly)   # the interpolant, with the kernel the fit used
 info                                                      # the smoothing parameter and the estimated noise
-````
+```
 
 ```{julia}
 #| echo: false
@@ -69,10 +68,13 @@ println("|:--|--:|--:|")
 
 ```{julia}
 #| echo: false
-p1 = heatmap(xf, yf, itp_fine', title = "interpolant", clims = (-1, 1), colorbar = false, aspect_ratio = 1)
-scatter!(p1, pts[1, :], pts[2, :], markersize = 1.5, markercolor = :white, markerstrokewidth = 0.5, label = "")
-p2 = heatmap(xf, yf, exact2', title = "signal", clims = (-1, 1), colorbar = false, aspect_ratio = 1)
-plot(p1, p2, layout = (1, 2), size = (760, 380))
+fig = Figure(size = (800, 400))
+ax1 = Axis(fig[1, 1]; title = "interpolant", aspect = DataAspect())
+heatmap!(ax1, xf, yf, itp_fine; colorrange = (-1, 1))
+scatter!(ax1, pts[1, :], pts[2, :]; markersize = 3, color = :white, strokecolor = :black, strokewidth = 0.5)
+ax2 = Axis(fig[1, 2]; title = "signal", aspect = DataAspect())
+heatmap!(ax2, xf, yf, exact2; colorrange = (-1, 1))
+fig
 ```
 
 The grid is sized from the point density, as fine as the points resolve, and the smoothing is
@@ -153,12 +155,15 @@ println("|:--|--:|--:|--:|")
 
 ```{julia}
 #| echo: false
-plot(xlabel = "x", legend = :topleft)
-scatter!(xs, ys, markercolor = :white, markerstrokewidth = 1.5, label = "points")
-plot!(xr, itp_u.(xr), label = "uniform grid")
-plot!(xr, itp_a.(xr), label = "adaptive grid")
-plot!(xr, layer.(xr), color = :black, linestyle = :dash, label = "function")
-scatter!(ka[1], fill(-1.1, length(ka[1])), markershape = :vline, markersize = 6, label = "adaptive knots")
+fig = Figure(size = (800, 400))
+ax = Axis(fig[1, 1]; xlabel = "x")
+scatter!(ax, xs, ys; markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5, label = "points")
+lines!(ax, xr, itp_u.(xr); label = "uniform grid")
+lines!(ax, xr, itp_a.(xr); label = "adaptive grid")
+lines!(ax, xr, layer.(xr); color = :black, linestyle = :dash, label = "function")
+scatter!(ax, ka[1], fill(-1.1, length(ka[1])); marker = :vline, markersize = 12, color = :black, label = "adaptive knots")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 Exactness at the points and accuracy between them are different things. On the same clustered

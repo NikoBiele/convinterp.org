@@ -1,0 +1,182 @@
+---
+title: "Derivatives"
+subtitle: "ConvolutionInterpolations.jl against Interpolations.jl, BSplineKit.jl and Dierckx.jl"
+engine: julia
+---
+
+The first three derivatives of a difficult function from uniformly spaced samples: the
+analytic derivatives of the convolution kernels against those of the cubic B-spline of
+Interpolations.jl (first and second only, which is what it offers), the B-spline interpolants
+of BSplineKit.jl, and the quintic FITPACK spline of Dierckx.jl. First the accuracy as the grid
+is refined, then the time to evaluate a first derivative, and finally the time each method
+needs to reach a given accuracy in it.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages, the methods, and the test function"
+using ConvolutionInterpolations
+import Interpolations                # qualified: exports `interpolate`, as BSplineKit does
+import BSplineKit
+import Dierckx
+using Chairmarks, Printf, Random, CairoMakie
+
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function
+function drunge(x, m)                                     # its m-th derivative, m = 1, 2, 3
+    s = 1 + 25x^2
+    m == 1 ? -50x / s^2 :
+    m == 2 ? 50 * (75x^2 - 1) / s^3 :
+             15000x * (1 - 25x^2) / s^4
+end
+xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
+
+# each method maps (x, y, m) to a callable m-th derivative, or `nothing` where it has none
+function interpolations_derivative(x, y, m)
+    m > 2 && return nothing                               # Interpolations.jl offers gradient and hessian
+    s = Interpolations.scale(Interpolations.interpolate(y,
+            Interpolations.BSpline(Interpolations.Cubic(Interpolations.Line(Interpolations.OnGrid())))), x)
+    m == 1 ? (p -> Interpolations.gradient(s, p)[1]) : (p -> Interpolations.hessian(s, p)[1])
+end
+bsplinekit_derivative(k) = (x, y, m) -> begin
+    S = BSplineKit.interpolate(x, y, BSplineKit.BSplineOrder(k))
+    BSplineKit.Derivative(m) * S                          # the spline's m-th derivative, itself a spline
+end
+dierckx_derivative(x, y, m) = (spl = Dierckx.Spline1D(collect(x), collect(y); k = 5);
+                               p -> Dierckx.derivative(spl, p; nu = m))
+convinterp_derivative(kernel, maxm) = (x, y, m) ->
+    m > maxm ? nothing : convolution_interpolation(x, y; kernel = kernel, derivative = m)
+
+methods = [
+    "Interpolations.jl cubic" => interpolations_derivative,
+    "BSplineKit k=4"          => bsplinekit_derivative(4),
+    "BSplineKit k=8"          => bsplinekit_derivative(8),
+    "Dierckx k=5"             => dierckx_derivative,
+    "ConvInterp :a4"          => convinterp_derivative(:a4, 1),
+    "ConvInterp :b5"          => convinterp_derivative(:b5, 3),
+    "ConvInterp :b7"          => convinterp_derivative(:b7, 5),
+];
+```
+
+## Convergence
+
+The largest error of each derivative against the exact one, as the number of samples doubles.
+A method appears in a panel only if it provides that derivative order:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+ns = [41, 81, 161, 321, 641, 1281]
+hs = 2 ./ (ns .- 1)
+errs = Dict((name, m) => Float64[] for (name, _) in methods, m in 1:3)
+for n in ns
+    x = range(-1, 1, length = n)
+    y = runge.(x)
+    for (name, meth) in methods, m in 1:3
+        d = meth(x, y, m)
+        d === nothing && continue
+        push!(errs[(name, m)], maximum(abs.(d.(xr) .- drunge.(xr, m))))
+    end
+end
+
+fig = Figure(size = (800, 900))
+axes = [Axis(fig[m, 1]; xscale = log10, yscale = log10, xreversed = true,
+             title = "derivative order $m", xlabel = "spacing h", ylabel = "largest error") for m in 1:3]
+for (name, _) in methods, m in 1:3
+    isempty(errs[(name, m)]) && continue
+    scatterlines!(axes[m], hs, max.(errs[(name, m)], 1e-17); markersize = 8, label = name)
+end
+for m in 1:3
+    Legend(fig[m, 2], axes[m])                            # each panel lists the methods it has
+end
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+function observed(e)
+    i = findlast(v -> v > 1e-11, e); i = max(i, 2)        # the finest grid still clear of rounding
+    log(e[i-1] / e[i]) / log(hs[i-1] / hs[i])
+end
+println("| observed order | derivative 1 | derivative 2 | derivative 3 |")
+println("|:--|--:|--:|--:|")
+for (name, _) in methods
+    cells = [isempty(errs[(name, m)]) ? "—" : @sprintf("%.2f", observed(errs[(name, m)])) for m in 1:3]
+    println("| ", name, " | ", join(cells, " | "), " |")
+end
+```
+
+Every method loses about one order per derivative: the cubic ones from 4th order down to a
+piecewise-constant third derivative, Dierckx's quintic and `:b5` from 6th, BSplineKit at
+order 8 and `:b7` from their interpolation order. The rounding floor of a derivative rises with
+the number of samples, as $1/h^m$, which is the price of differentiating sampled data and
+the same for every method.
+
+## Query time
+
+Evaluation time per point of the first derivative, at a million random points on a grid of a
+thousand samples, each derivative built once and evaluated in one broadcast:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings"
+rng = MersenneTwister(1)
+x1 = range(-1, 1, length = 1000)
+y1 = runge.(x1)
+p1 = rand(rng, 1_000_000) .* 1.98 .- 0.99
+
+rows = map(methods) do (name, meth)
+    d = meth(x1, y1, 1)
+    t_query = (@b $d.($p1)).time / length(p1)
+    (name = name, t_query = t_query)
+end;
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) : @sprintf("%.2f ms", 1e3 * t)
+println("| | first derivative, per point |")
+println("|:--|--:|")
+for r in rows
+    println("| ", r.name, " | ", fmt(r.t_query), " |")
+end
+```
+
+A derivative of a convolution interpolant is the same stencil sum with the differentiated
+kernel's weights, so it costs what the interpolant costs. A spline derivative is a spline of
+one degree lower, evaluated like any spline; Interpolations.jl's `gradient` assembles the
+derivative from the B-spline's pieces at each call.
+
+## Time to accuracy
+
+As on the [interpolation page](interpolation.qmd): for each method and each grid of the
+convergence study, the time to construct the first derivative and evaluate it at a hundred
+thousand points, against its error on that grid.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The work–precision study"
+pw = rand(rng, 100_000) .* 1.98 .- 0.99                   # the evaluation workload
+times = Dict(name => Float64[] for (name, _) in methods)
+for n in ns
+    x = range(-1, 1, length = n)
+    y = runge.(x)
+    for (name, meth) in methods
+        push!(times[name], (@b begin d = $meth($x, $y, 1); d.($pw) end).time)
+    end
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10,
+          xlabel = "time to construct and evaluate the first derivative at 10⁵ points [s]", ylabel = "largest error")
+for (name, _) in methods
+    scatterlines!(ax, times[name], max.(errs[(name, 1)], 1e-17); markersize = 8, label = name)
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+The picture is the interpolation page's, one order down: the curves are nearly vertical, so
+each method's position is its cost per point and its depth is what its order buys, and the
+kernels are first to any accuracy of the derivative down to its rounding floor.

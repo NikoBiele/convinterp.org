@@ -5,8 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, Plots, Printf
-default(size = (720, 400), linewidth = 2, framestyle = :box, fontfamily = "sans-serif")
+using ConvolutionInterpolations, CairoMakie, Printf
 ```
 
 A negative `derivative` order gives an interpolant of an integral: `derivative = -1` is the
@@ -82,11 +81,15 @@ errors = [begin
               maximum(abs.(itp_m.(xr) .- exact[1-m].(xr)))
           end for n in ns, m in orders]
 
-plot(xscale = :log10, yscale = :log10, xlabel = "spacing h", ylabel = "largest error",
-     legend = :bottomleft, xflip = true)
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
+          xlabel = "spacing h", ylabel = "largest error")
 for (j, m) in enumerate(orders)
-    plot!(hs, errors[:, j], marker = :circle, label = m == 0 ? "interpolant" : "integral order $(-m)")
+    scatterlines!(ax, hs, max.(errors[:, j], 1e-17); markersize = 8,
+                  label = m == 0 ? "interpolant" : "integral order $(-m)")
 end
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ```{julia}
@@ -171,8 +174,12 @@ spike = [abs(xi - π) < h / 2 ? 1 / h : 0.0 for xi in xs]  # a unit-area spike a
 F = convolution_interpolation(xs, spike; kernel = :a0, derivative = -1)   # its integral
 
 xf = range(0, 2π, length = 801)
-plot(xf, F.(xf), label = "∫ spike", xlabel = "x")
-plot!(xf, (xf .> π) .* 1.0, color = :black, linestyle = :dash, label = "unit step")
+fig = Figure(size = (800, 400))
+ax = Axis(fig[1, 1]; xlabel = "x")
+lines!(ax, xf, F.(xf); label = "∫ spike")
+lines!(ax, xf, (xf .> π) .* 1.0; color = :black, linestyle = :dash, label = "unit step")
+Legend(fig[1, 2], ax)
+fig
 ```
 
 ## Nonuniform grids

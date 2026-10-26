@@ -59,11 +59,12 @@ println("|:--|--:|--:|")
 ```
 
 The result is an interpolant, so derivatives and integrals of the smoothed signal come from the
-same object, as on the other pages. The fit's grid is as fine as the data density allows, so
-that nothing the points resolve is lost before the smoothing is chosen, and it warns, pointing
-at the `oversample` keyword, when the fitted smoothing would need a finer grid still. It solves
-a sparse system, so it costs more than a pass over the data, and the system grows with the
-dimension.
+same object, as on the other pages. The fit starts on a grid as fine as the data density
+allows, so that nothing the points resolve is lost before the smoothing is chosen, and then
+refits on the coarsest grid that resolves the smoothing it found — the grid it returns — and it
+warns, pointing at the `oversample` keyword, when the fitted smoothing would need a finer grid
+than the data allow. It solves a sparse system, so it costs more than a pass over the data,
+and the system grows with the dimension.
 
 The same fit on the same noise, with the signal's frequency raised, shows what the
 cross-validation does: the smoothing follows the signal, not a preset width.

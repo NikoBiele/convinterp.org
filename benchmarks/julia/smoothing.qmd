@@ -1,0 +1,249 @@
+---
+title: "Smoothing"
+subtitle: "fit_scattered and the Gaussian against the smoothing splines of BSplineKit.jl and Dierckx.jl and the polynomial regression of FastChebInterp.jl"
+engine: julia
+---
+
+Recovering a signal from noisy samples on a uniform grid: `fit_scattered`, which chooses its
+smoothing by generalized cross-validation, and the package's Gaussian kernel against the cubic
+smoothing spline of BSplineKit.jl, the quintic FITPACK smoothing spline of Dierckx.jl and the
+least-squares Chebyshev polynomial of FastChebInterp.jl. Each of those four has a parameter
+the user must choose — the width `B`, the penalty `λ`, the residual budget `s`, the degree —
+so each is given the value that minimises the error against the signal, found by searching
+for it: an oracle no user has. `fit_scattered` is told nothing. Accuracy against noise level
+and signal frequency, then time, then the two together as the samples grow.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages and the methods"
+using ConvolutionInterpolations
+import BSplineKit
+import Dierckx
+import FastChebInterp
+using Chairmarks, Printf, Random, CairoMakie
+
+rms(v) = sqrt(sum(abs2, v) / length(v))                   # root mean square, the error measure throughout
+logrange10(a, b, n) = exp10.(range(log10(a), log10(b), length = n))   # n values from a to b, logarithmically spaced
+
+# the smoothing of a noisy sine as a function of the smoothing parameter p: each method maps
+# (x, y, p) to the smoothed values on the grid x
+gaussian(x, y, B) = convolution_smooth(x, y, B)            # the package's Gaussian kernel, width B in grid spacings
+bsk(x, y, λ) = BSplineKit.fit(BSplineKit.BSplineOrder(4), x, y, λ).(x)   # the cubic smoothing spline, penalty weight λ
+# the quintic FITPACK spline, residual budget s; FITPACK errors when s is smaller than it can reach,
+# which the oracle search treats as a failed trial (infinite error) rather than a failure of the page
+dierckx(x, y, s) = try
+    Dierckx.Spline1D(collect(x), y; k = 5, s = s).(x)
+catch
+    fill(Inf, length(x))
+end
+cheb(x, y, d) = FastChebInterp.chebregression(collect(x), y, d).(x)   # the least-squares Chebyshev polynomial of degree d
+
+# fit_scattered takes the knots as a matrix of points and returns a fitted grid; the fitted
+# values on the data grid come from the interpolant built on that grid with the kernel the fit used
+function fitted(x, y)
+    knots, vals, _ = fit_scattered(reshape(collect(x), 1, :), y; mode = :smooth, grid = :adaptive)   # the smoothing is chosen by cross-validation
+    convolution_interpolation(knots, vals; kernel = :b5).(x)
+end
+
+# the oracle: the parameter in the range that gives the smallest error against the signal
+function oracle(method, x, y, clean, range)
+    errs = [rms(method(x, y, p) .- clean) for p in range]
+    i = argmin(errs)
+    (p = range[i], err = errs[i])
+end
+
+# the parameter ranges searched; the splines' ranges scale with the data, so they are functions of n and σ
+Brange(n) = (400 / n)^2 .* logrange10(0.005, 2.0, 25)      # Gaussian widths in grid spacings, scaled so the width in x is the same on every grid
+λrange = logrange10(1e-9, 1e2, 34)                         # penalty weights, from interpolation to a straight line
+srange(n, σ) = n * σ^2 .* logrange10(0.05, 20.0, 27)       # residual budgets around the expected residual n σ²
+drange(n) = 2:2:min(160, n - 1)                            # polynomial degrees, at most the number of samples allows
+
+# one noise realisation, drawn once on the finest grid of the page; every grid whose spacing is a
+# multiple of the finest one takes its noise from it, so that refining the grid changes only the
+# samples, not the noise. A grid that does not nest in the finest one gets its own draw.
+const NMAX = 6401
+const NOISE = randn(MersenneTwister(1), NMAX)
+function noise(n)
+    if (NMAX - 1) % (n - 1) == 0
+        NOISE[1:(NMAX - 1) ÷ (n - 1):end]                  # every stride-th value of the shared realisation
+    else
+        randn(MersenneTwister(1), n)
+    end
+end
+
+# the test signal: a sine with k cycles over [0, 2π], sampled at n points with noise of standard deviation σ
+function signal(n, k, σ)
+    x = range(0, 2π, length = n)
+    clean = sin.(k .* x)
+    noisy = clean .+ σ .* noise(n)
+    (x = x, clean = clean, noisy = noisy)
+end
+
+# the five errors of one test case, the fit untuned and the others at their oracle parameter
+function errors(n, k, σ)
+    x, clean, noisy = signal(n, k, σ)
+    (fit      = rms(fitted(x, noisy) .- clean),
+     gaussian = oracle(gaussian, x, noisy, clean, Brange(n)).err,
+     bsk      = oracle(bsk, x, noisy, clean, λrange).err,
+     dierckx  = oracle(dierckx, x, noisy, clean, srange(n, σ)).err,
+     cheb     = oracle(cheb, x, noisy, clean, drange(n)).err)
+end
+
+names = (fit = "fit_scattered (untuned)", gaussian = "Gaussian (oracle B)",
+         bsk = "BSplineKit cubic (oracle λ)", dierckx = "Dierckx k=5 (oracle s)",
+         cheb = "FastChebInterp (oracle degree)");
+```
+
+## Noise level and signal frequency
+
+Four hundred samples. Left, three cycles of the sine and the noise standard deviation growing
+from one percent of the amplitude to a third of it; right, the noise fixed at a tenth and the
+number of cycles growing until the grid has about thirteen points per cycle. The error is the
+root mean square against the signal on the data grid; the data's own error, which smoothing
+should improve on, is the noise standard deviation.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The noise and frequency studies"
+n = 401                                                   # one more than 400, so the grid nests in the finest one of the page
+σs = (0.01, 0.03, 0.1, 0.3)                               # noise levels at k = 3
+ks = (1, 3, 10, 30)                                       # cycles at σ = 0.1
+by_noise = [errors(n, 3, σ) for σ in σs]
+by_freq  = [errors(n, k, 0.1) for k in ks]
+
+fig = Figure(size = (800, 380))
+ax1 = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "noise standard deviation σ", ylabel = "rms error", title = "3 cycles")
+ax2 = Axis(fig[1, 2]; xscale = log10, yscale = log10, xlabel = "cycles over the interval", title = "σ = 0.1")
+for key in keys(names)
+    scatterlines!(ax1, collect(σs), [e[key] for e in by_noise]; markersize = 8, label = names[key])
+    scatterlines!(ax2, collect(ks), [e[key] for e in by_freq]; markersize = 8)
+end
+lines!(ax1, collect(σs), collect(σs); color = :black, linestyle = :dash, label = "the noise itself")
+hlines!(ax2, [0.1]; color = :black, linestyle = :dash)
+Legend(fig[2, 1:2], ax1; orientation = :horizontal, nbanks = 2)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| rms error, 3 cycles | σ = ", join(σs, " | σ = "), " |")
+println("|:--|", "--:|"^length(σs))
+for key in keys(names)
+    println("| ", names[key], " | ", join((@sprintf("%.4f", e[key]) for e in by_noise), " | "), " |")
+end
+println()
+println("| rms error, σ = 0.1 | ", join(ks, " cycles | "), " cycles |")
+println("|:--|", "--:|"^length(ks))
+for key in keys(names)
+    println("| ", names[key], " | ", join((@sprintf("%.4f", e[key]) for e in by_freq), " | "), " |")
+end
+```
+
+The tuned rows are the best each method can do, found by looking at the answer; the fit's row
+is what it does on its own. Even so the fit is ahead of the Gaussian and the splines nearly
+everywhere, and level with the Chebyshev polynomial — a global fit, the ideal smoother for a
+sine — from three cycles up. Its loss at one cycle is GCV's: on a short series of a very
+smooth signal the criterion's minimum is shallow and it settles on too little smoothing. What
+a user gets from the other methods is a hand-chosen parameter, which lands somewhere above
+each oracle row.
+
+## Setup
+
+The time to produce the smoothed values on the grid, for the four hundred samples above and
+for ten thousand, each method at its parameter from the first study. The fit's time includes
+the cross-validation that chooses its parameter; the other three are timed at a parameter
+already known, so the search that found it is not in their times.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings"
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1    ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t)
+
+function timings(n)
+    x, clean, noisy = signal(n, 3, 0.1)
+    B = oracle(gaussian, x, noisy, clean, Brange(n)).p
+    λ = oracle(bsk, x, noisy, clean, λrange).p
+    s = oracle(dierckx, x, noisy, clean, srange(n, 0.1)).p
+    d = oracle(cheb, x, noisy, clean, drange(n)).p
+    (fit      = (@b fitted($x, $noisy)).time,
+     gaussian = (@b gaussian($x, $noisy, $B)).time,
+     bsk      = (@b bsk($x, $noisy, $λ)).time,
+     dierckx  = (@b dierckx($x, $noisy, $s)).time,
+     cheb     = (@b cheb($x, $noisy, $d)).time)
+end
+t400 = timings(401)
+t10k = timings(10_000);
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | 401 samples | 10 000 samples |")
+println("|:--|--:|--:|")
+for key in keys(names)
+    println("| ", names[key], " | ", fmt(t400[key]), " | ", fmt(t10k[key]), " |")
+end
+```
+
+The Gaussian is a pass over the data, the polynomial a small least-squares problem, the splines
+a banded solve; the fit solves a sparse system once per trial value of its smoothing
+parameter, first on a grid as fine as the data and then on the coarse grid the smoothing
+needs, so its cost is the price of not having to choose. Where the parameter is known, the
+Gaussian is the fast path, and in many dimensions the only feasible one.
+
+## Time to accuracy
+
+With noise, the error falls with the number of samples for every method, so the question of
+which reaches a given accuracy in the least time has the same shape as on the interpolation
+page. Three cycles, noise of a tenth, and the number of samples doubling; each method's time to
+produce the smoothed values on its grid against its error there. The tuned methods are again at
+their oracle parameter, chosen anew for each grid and not timed.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The work–precision study"
+ns = [101, 201, 401, 801, 1601, 3201, 6401]               # nested grids: each is every second point of the next
+wp = map(ns) do n
+    x, clean, noisy = signal(n, 3, 0.1)
+    B = oracle(gaussian, x, noisy, clean, Brange(n))
+    λ = oracle(bsk, x, noisy, clean, λrange)
+    s = oracle(dierckx, x, noisy, clean, srange(n, 0.1))
+    d = oracle(cheb, x, noisy, clean, drange(n))
+    (err  = (fit = rms(fitted(x, noisy) .- clean), gaussian = B.err, bsk = λ.err, dierckx = s.err, cheb = d.err),
+     time = (fit = (@b fitted($x, $noisy)).time, gaussian = (@b gaussian($x, $noisy, $(B.p))).time,
+             bsk = (@b bsk($x, $noisy, $(λ.p))).time, dierckx = (@b dierckx($x, $noisy, $(s.p))).time,
+             cheb = (@b cheb($x, $noisy, $(d.p))).time))
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "time to smooth [s]", ylabel = "rms error")
+for key in keys(names)
+    scatterlines!(ax, [w.time[key] for w in wp], [w.err[key] for w in wp]; markersize = 8, label = names[key])
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| rms error, σ = 0.1 | ", join(ns, " | "), " |")
+println("|:--|", "--:|"^length(ns))
+for key in keys(names)
+    println("| ", names[key], " | ", join((@sprintf("%.4f", w.err[key]) for w in wp), " | "), " |")
+end
+```
+
+Every curve descends as the samples grow, and the fit's descends fastest: once the series is
+long enough for the cross-validation to find the smoothing, it ends below every tuned method,
+the polynomial included. The FITPACK spline's curve is the uneven one — it places its own
+knots, and how many it chooses at a given budget `s` does not vary smoothly with the data.
+What the time axis adds is the cost per sample of each descent.
+
+None of this is specific to a grid. The same `fit_scattered` call takes points anywhere, in
+any number of dimensions, and returns an interpolant with its derivatives and integrals; the
+[scattered-data benchmark](scattered.qmd) is that comparison, where the smoothing splines have
+no counterpart.

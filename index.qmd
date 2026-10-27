@@ -44,7 +44,8 @@ The [concept pages](concepts/interpolation.qmd) explain each capability with the
 both languages; the [Julia](benchmarks/julia/index.qmd) and [Python](benchmarks/python/index.qmd)
 benchmarks compare both packages with the established alternatives in their language, on the same
 test functions and with the scripts that produced every figure; and the [theory page](theory.qmd)
-derives the kernels from their defining conditions.
+derives the kernels from their defining conditions. The Julia package was presented at JuliaCon
+2026; the recording is on the [About page](about.qmd).
 
 ## Installation
 

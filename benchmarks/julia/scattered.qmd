@@ -1,0 +1,334 @@
+---
+title: "Scattered data"
+subtitle: "fit_scattered against the radial basis functions of ScatteredInterpolation.jl and the natural-neighbour interpolants of NaturalNeighbours.jl"
+engine: julia
+---
+
+Interpolation and smoothing of values at points that lie on no grid: `fit_scattered`, which
+fits a gridded convolution interpolant to the points, against two kinds of scattered-data
+method. Radial basis functions place a basis function at every point and solve a dense system
+for the weights; the thin-plate spline and the cubic polyharmonic spline of
+ScatteredInterpolation.jl are used, the two that have no shape parameter to choose. Natural
+neighbours interpolate from the Voronoi cells of a Delaunay triangulation; NaturalNeighbours.jl
+provides them, and its `Sibson(1)` and `Hiyoshi(2)` are the C¹ and C² ones. The radial basis
+functions work in any dimension; natural neighbours exist in two, which is where everything on
+this page is measured. First trusted data as the points grow, then noisy data, then the time to
+construct and to evaluate, the two together, and finally what the fit returns that the others
+do not.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages, the test function and the methods"
+using ConvolutionInterpolations
+import ScatteredInterpolation as SI
+import NaturalNeighbours as NN
+import HCubature
+using Chairmarks, Printf, Random, CairoMakie
+
+rms(v) = sqrt(sum(abs2, v) / length(v))                   # root mean square, the error measure for noisy data
+logrange10(a, b, n) = exp10.(range(log10(a), log10(b), length = n))   # n values from a to b, logarithmically spaced
+
+# Franke's function, the classical scattered-data test: three bumps and a dip on the unit square
+franke(x, y) = 0.75exp(-((9x - 2)^2 + (9y - 2)^2) / 4) + 0.75exp(-(9x + 1)^2 / 49 - (9y + 1) / 10) +
+               0.5exp(-((9x - 7)^2 + (9y - 3)^2) / 4) - 0.2exp(-(9x - 4)^2 - (9y - 7)^2)
+# its derivative along x, term by term
+franke_x(x, y) = 0.75exp(-((9x - 2)^2 + (9y - 2)^2) / 4) * (-9(9x - 2) / 2) +
+                 0.75exp(-(9x + 1)^2 / 49 - (9y + 1) / 10) * (-18(9x + 1) / 49) +
+                 0.5exp(-((9x - 7)^2 + (9y - 3)^2) / 4) * (-9(9x - 7) / 2) -
+                 0.2exp(-(9x - 4)^2 - (9y - 7)^2) * (-18(9x - 4))
+
+# n points in the unit square, one per column; the four corners are always among them, so that
+# the convex hull of every point set is the whole square and all methods are defined everywhere on it
+function points(n, seed)
+    P = rand(MersenneTwister(seed), 2, n)
+    P[:, 1:4] .= [0.0 0.0 1.0 1.0; 0.0 1.0 0.0 1.0]
+    P
+end
+
+# the test grid on which the errors are measured: the centres of a 101 × 101 grid of cells, so
+# that every test point is strictly inside the square — on its boundary, which is the convex hull
+# of the points, the natural-neighbour coordinates are degenerate
+xg = range(0.5 / 101, 1 - 0.5 / 101, length = 101)
+xq = vec([x for x in xg, y in xg])                        # the grid as two vectors of coordinates
+yq = vec([y for x in xg, y in xg])
+Q = vcat(xq', yq')                                        # and as a matrix of points, one per column
+exact = franke.(xq, yq)
+
+# each method is a pair: `setup` builds an interpolant from the points P and values v, and
+# `query` evaluates it on the test grid. The fits are built through the scattered wrapper, which
+# fits the grid and returns the interpolant with the kernel and boundary rule the fit used.
+methods = (
+    fit_exact  = (setup = (P, v) -> convolution_interpolation(P, v; mode = :exact),
+                  query = (itp) -> itp.(xq, yq)),
+    thinplate  = (setup = (P, v) -> SI.interpolate(SI.ThinPlate(), P, v),
+                  query = (itp) -> SI.evaluate(itp, Q)),
+    cubic      = (setup = (P, v) -> SI.interpolate(SI.Polyharmonic(3), P, v),
+                  query = (itp) -> SI.evaluate(itp, Q)),
+    sibson1    = (setup = (P, v) -> NN.interpolate(P[1, :], P[2, :], v; derivatives = true),
+                  query = (itp) -> itp(xq, yq; method = NN.Sibson(1))),
+    hiyoshi2   = (setup = (P, v) -> NN.interpolate(P[1, :], P[2, :], v; derivatives = true),
+                  query = (itp) -> itp(xq, yq; method = NN.Hiyoshi(2))),
+)
+names = (fit_exact = "fit_scattered :exact", thinplate = "thin-plate spline", cubic = "cubic polyharmonic",
+         sibson1 = "Sibson(1)", hiyoshi2 = "Hiyoshi(2)");
+```
+
+## The function and the points
+
+Franke's function on the unit square, and eight hundred of the points it is sampled at:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The surface"
+P800 = points(800, 1)
+v800 = [franke(p[1], p[2]) for p in eachcol(P800)]
+
+fig = Figure(size = (800, 520))
+ax = Axis3(fig[1, 1]; xlabel = "x", ylabel = "y", zlabel = "", azimuth = -0.5π + 0.4, elevation = 0.35)
+surface!(ax, xg, xg, [franke(x, y) for x in xg, y in xg]; colormap = :viridis, alpha = 0.85)
+scatter!(ax, P800[1, :], P800[2, :], v800; markersize = 5, color = :white, strokecolor = :black, strokewidth = 0.6)
+fig
+```
+
+## Trusted data
+
+The largest error on the test grid as the number of points doubles, every method passing
+through the points. The fit matches the points to machine precision when its grid separates
+them and falls back to a least-squares fit where random points share a grid cell; the last
+column reports the largest deviation at the points, so the table says which it was.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+ns = [100, 200, 400, 800, 1600, 3200, 6400]
+errs = Dict(key => Float64[] for key in keys(methods))
+viols = Float64[]
+for (i, n) in enumerate(ns)
+    P = points(n, i)
+    v = [franke(p[1], p[2]) for p in eachcol(P)]
+    for (key, m) in pairs(methods)
+        itp = m.setup(P, v)
+        push!(errs[key], maximum(abs.(m.query(itp) .- exact)))
+        key == :fit_exact && push!(viols, maximum(abs(itp(p[1], p[2]) - vi) for (p, vi) in zip(eachcol(P), v)))
+    end
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "points", ylabel = "largest error")
+for key in keys(methods)
+    scatterlines!(ax, ns, errs[key]; markersize = 8, label = names[key])
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| largest error | ", join(ns, " points | "), " points |")
+println("|:--|", "--:|"^length(ns))
+for key in keys(methods)
+    println("| ", names[key], " | ", join((@sprintf("%.1e", e) for e in errs[key]), " | "), " |")
+end
+println()
+println("| fit_scattered :exact | ", join(ns, " points | "), " points |")
+println("|:--|", "--:|"^length(ns))
+println("| largest deviation at the points | ", join((@sprintf("%.1e", v) for v in viols), " | "), " |")
+```
+
+The radial basis functions are global and smooth, and the two splines converge steadily; the
+natural-neighbour interpolants are local and converge more slowly, and Hiyoshi's higher-order
+blend buys nothing over Sibson's here. The fit is a fifth-order kernel on a grid sized from
+the points, and it needs a few hundred of them before that grid resolves the bumps: at a
+hundred points it is the least accurate of the five, from four hundred up it is the most
+accurate, and the gap grows with every doubling until the finest sets, where it levels off.
+The deviation row shows that the grid separated the points on every set, so each fit passes
+through its data to machine precision, and the interpolant between the points is the smoothest
+of the grids that do so.
+
+## Noisy data
+
+Sixteen hundred points, the values carrying noise of growing standard deviation, and the root
+mean square error against the signal on the test grid. `fit_scattered` in its default
+`:smooth` mode, on the uniform grid and on the adaptive grid, chooses its smoothing by
+cross-validation and is told nothing. The radial basis functions smooth by ridge regression,
+the `smooth` keyword of ScatteredInterpolation.jl adding a constant to the diagonal of their
+system; that constant is given the value that minimises the error against the signal, found by
+searching for it — an oracle no user has. Sibson's interpolant is shown as it is: an
+interpolant reproduces the noise, so its error is the noise itself.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The noise study"
+σs = (0.01, 0.03, 0.1, 0.3)
+srange = logrange10(1e-7, 1e1, 26)                        # ridge values searched for the oracle
+P = points(1600, 10)
+v = [franke(p[1], p[2]) for p in eachcol(P)]
+
+# the error of a ridge-smoothed radial basis function at its best ridge value
+function oracle_rbf(basis, P, noisy)
+    best = Inf
+    for s in srange
+        itp = SI.interpolate(basis, P, noisy; smooth = s)
+        best = min(best, rms(SI.evaluate(itp, Q) .- exact))
+    end
+    best
+end
+
+smooth_names = (uniform = "fit_scattered :smooth, uniform grid", adaptive = "fit_scattered :smooth, adaptive grid",
+                thinplate = "thin-plate spline (oracle ridge)", cubic = "cubic polyharmonic (oracle ridge)",
+                sibson1 = "Sibson(1)")
+by_noise = map(σs) do σ
+    noisy = v .+ σ .* randn(MersenneTwister(20), 1600)
+    (uniform   = rms(convolution_interpolation(P, noisy).(xq, yq) .- exact),
+     adaptive  = rms(convolution_interpolation(P, noisy; grid = :adaptive).(xq, yq) .- exact),
+     thinplate = oracle_rbf(SI.ThinPlate(), P, noisy),
+     cubic     = oracle_rbf(SI.Polyharmonic(3), P, noisy),
+     sibson1   = rms(methods.sibson1.query(methods.sibson1.setup(P, noisy)) .- exact))
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "noise standard deviation σ", ylabel = "rms error")
+for key in keys(smooth_names)
+    scatterlines!(ax, collect(σs), [e[key] for e in by_noise]; markersize = 8, label = smooth_names[key])
+end
+lines!(ax, collect(σs), collect(σs); color = :black, linestyle = :dash, label = "the noise itself")
+Legend(fig[1, 2], ax)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| rms error, 1600 points | σ = ", join(σs, " | σ = "), " |")
+println("|:--|", "--:|"^length(σs))
+for key in keys(smooth_names)
+    println("| ", smooth_names[key], " | ", join((@sprintf("%.4f", e[key]) for e in by_noise), " | "), " |")
+end
+```
+
+The two fits are the untuned rows; the ridge rows are the best the radial basis functions can
+do when the answer is used to choose their parameter. The adaptive grid places its knots where
+the fitted surface curves, and so spends them on the bumps; on Franke's function, whose
+features fill the square fairly evenly, it and the uniform grid are close, and the gain of the
+adaptive grid is largest on data with a steep layer, as the
+[smoothing benchmark](smoothing.qmd) and the [concept page](../../concepts/scattered.qmd) show.
+A hand-chosen ridge lands above the oracle rows; cross-validation lands where the fit's rows
+are, every time, without a choice to make.
+
+## Setup and query
+
+The time to construct an interpolant from the points, and the time to evaluate it on the
+test grid of `r length(xq)` points, for eight hundred and for 6400 points. The radial basis
+functions solve a dense system whose size is the number of points, and evaluate by summing over
+all of them; the natural-neighbour interpolants triangulate once and evaluate locally; the fit
+solves a sparse system on its grid once, or once per trial smoothing in `:smooth` mode, and
+evaluates in the gridded kernel's constant time per point.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings"
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1    ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t)
+
+function timings(n)
+    P = points(n, 30)
+    v = [franke(p[1], p[2]) for p in eachcol(P)]
+    map(methods) do m
+        itp = m.setup(P, v)
+        (setup = (@b $(m.setup)($P, $v)).time, query = (@b $(m.query)($itp)).time)
+    end
+end
+t800 = timings(800)
+t6400 = timings(6400);
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | setup, 800 points | query, 800 points | setup, 6400 points | query, 6400 points |")
+println("|:--|--:|--:|--:|--:|")
+for key in keys(methods)
+    println("| ", names[key], " | ", fmt(t800[key].setup), " | ", fmt(t800[key].query), " | ",
+            fmt(t6400[key].setup), " | ", fmt(t6400[key].query), " |")
+end
+```
+
+The radial basis functions' setup grows with the cube of the point count and their query with
+it linearly, so they are the methods of choice for a few hundred points and a few evaluations.
+The fit's query does not depend on the point count at all, since the interpolant it returns is
+a gridded one; its setup is the price of the grid.
+
+## Time to accuracy
+
+The two together for trusted data: each method's time to construct its interpolant and
+evaluate it on the test grid, against its largest error there, as the points grow. The sets of
+points are those of the convergence study.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The work–precision study"
+wp = map(enumerate(ns)) do (i, n)
+    P = points(n, i)
+    v = [franke(p[1], p[2]) for p in eachcol(P)]
+    map(methods) do m
+        itp = m.setup(P, v)
+        (err = maximum(abs.(m.query(itp) .- exact)),
+         time = (@b $(m.setup)($P, $v)).time + (@b $(m.query)($itp)).time)
+    end
+end
+
+fig = Figure(size = (800, 420))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "time to construct and evaluate [s]", ylabel = "largest error")
+for key in keys(methods)
+    scatterlines!(ax, [w[key].time for w in wp], [w[key].err for w in wp]; markersize = 8, label = names[key])
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+The radial basis functions buy their accuracy with the dense solve, and the curve of each
+steepens as the solve comes to dominate; the natural-neighbour interpolants are cheap and stay
+at the accuracy their locality allows. The fit's curve falls below all of them from a few
+hundred points on: its construction grows only through the sparse solve, its evaluation does
+not grow at all, and the accuracies it reaches on the larger sets are reached by none of the
+other methods at any cost on this page. Where a fit for a few hundred points at modest accuracy
+is all that is wanted, the radial basis functions are cheaper; where accuracy or many
+evaluations are wanted, the fit is cheaper by every measure.
+
+## What the fit returns
+
+The interpolant from `fit_scattered` is a gridded convolution interpolant, so the derivatives
+and integrals of the other pages come with it: the derivative along an axis is the same fit
+evaluated with the derivative kernel, and a box integral over the domain is four evaluations
+of the twofold antiderivative. Neither radial basis function offers these in
+ScatteredInterpolation.jl; NaturalNeighbours.jl differentiates its interpolants, up to second
+order, and has no integral.
+
+```{julia}
+P = points(1600, 40)
+v = [franke(p[1], p[2]) for p in eachcol(P)]              # trusted values
+
+itp   = convolution_interpolation(P, v; mode = :exact)                          # the interpolant
+dx    = convolution_interpolation(P, v; mode = :exact, derivative = (1, 0))     # ∂/∂x of the same fit
+ii    = convolution_interpolation(P, v; mode = :exact, derivative = (-1, -1))   # ∫∫ from the corner
+
+box = (0.2, 0.7, 0.3, 0.8)                                # x₁, x₂, y₁, y₂ of a box inside the square
+boxint(F, x1, x2, y1, y2) = F(x2, y2) - F(x1, y2) - F(x2, y1) + F(x1, y1)   # inclusion–exclusion
+ref, _ = HCubature.hcubature(p -> franke(p[1], p[2]), (0.2, 0.3), (0.7, 0.8); rtol = 1e-12)   # the integral by adaptive quadrature
+itp(0.4, 0.6), dx(0.4, 0.6), boxint(ii, box...)
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | f(0.4, 0.6) | ∂f/∂x (0.4, 0.6) | ∫∫ over the box |")
+println("|:--|--:|--:|--:|")
+@printf("| from the fit | %.8f | %.8f | %.8f |\n", itp(0.4, 0.6), dx(0.4, 0.6), boxint(ii, box...))
+@printf("| exact | %.8f | %.8f | %.8f |\n", franke(0.4, 0.6), franke_x(0.4, 0.6), ref)
+```
+
+The accuracy of the three is the accuracy of the fit, from the table above at this point
+count, and the integral is the one quantity the noise does not spoil in `:smooth` mode either:
+smoothing changes the surface between the points, and integrating it averages that out.

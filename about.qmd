@@ -22,6 +22,14 @@ with Symmetrical Piecewise nth-Order Polynomial Kernels" (*IEEE Trans. Image Pro
 on [Interpolations.jl](https://github.com/JuliaMath/Interpolations.jl), where it began as a
 pull request before becoming a package of its own.
 
+## The JuliaCon talk
+
+The Julia package was presented at JuliaCon 2026. The recording is a short introduction to
+the convolution kernels and what they give — interpolation, derivatives and integrals from one
+object — before the benchmarks on this site existed:
+
+{{< video https://www.youtube.com/watch?v=QN3gvmk-WsE >}}
+
 ## Citing
 
 If you use either package in your work, please cite it. Each release of each package is

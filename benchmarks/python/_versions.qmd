@@ -1,0 +1,10 @@
+```{python}
+#| echo: false
+#| output: asis
+import platform, os
+from importlib.metadata import version
+pkgs = ["convinterp", "numpy", "scipy"]
+print("---\n")
+print(f"*Rendered with Python {platform.python_version()} on a {platform.processor() or platform.machine()} "
+      f"machine ({os.cpu_count()} threads), with " + ", ".join(f"{p} {version(p)}" for p in pkgs) + ".*")
+```

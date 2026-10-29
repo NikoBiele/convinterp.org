@@ -43,8 +43,8 @@ signal(x, y) = sin(3x) * cos(2y)                          # the signal
 vals = [signal(p[1], p[2]) for p in eachcol(pts)]         # the signal at the points
 noisy = vals .+ σ .* randn(800)                           # measured with noise
 
-knots, grid, info = fit_scattered(pts, noisy)             # the fitted grid, smoothing chosen by cross-validation
-itp = convolution_interpolation(knots, grid; kernel = :a4, bc = :poly)   # the interpolant, with the kernel the fit used
+itp = convolution_interpolation(pts, noisy)               # the interpolant, smoothing chosen by cross-validation
+knots, grid, info = fit_scattered(pts, noisy)             # the same fit, returned as its grid and the fit's report
 info                                                      # the smoothing parameter and the estimated noise
 ```
 
@@ -120,13 +120,18 @@ viol = maximum(abs(itp_x(p[1], p[2]) - v) for (p, v) in zip(eachcol(pts2), vals2
 
 ## Clustered points and adaptive grids
 
-An exact fit needs the grid to separate the points: two points in one grid cell cannot both be
-matched. A uniform grid sized from the mean density cannot do that for clustered points, and
-the fit says so with a warning and returns the least-squares fit instead. `grid = :adaptive`
-places the knots of each axis at the quantiles of the points' coordinates, so a dense band of
-points gets a dense band of knots — and where the points are dense because the function
-varies fast there, as in a measurement campaign that samples a layer closely, the dense knots
-are also where the accuracy is needed:
+`grid = :adaptive` lets the fit place its knots instead of spacing them evenly, and the two
+modes place them differently. In `:smooth` mode the knots follow the fitted surface: a first
+fit on the uniform grid gives the curvature, the knots of each axis are spread so that each
+interval carries the same share of it, and the fit is repeated on those knots, so a steep
+layer or a sharp bump gets the knots it needs and flat regions give theirs up. In `:exact`
+mode the knots follow the points: an exact fit needs the grid to separate the points, two
+points in one grid cell cannot both be matched, and a uniform grid sized from the mean density
+cannot do that for clustered points — the fit then says so with a warning and returns the
+least-squares fit instead. The adaptive grid places the knots of each axis at the quantiles of
+the points' coordinates, so a dense band of points gets a dense band of knots, and where the
+points are dense because the function varies fast there, as in a measurement campaign that
+samples a layer closely, the dense knots are also where the accuracy is needed:
 
 ```{julia}
 layer(x) = tanh(40x)                                      # a steep layer at the centre
@@ -190,5 +195,15 @@ mode-dependent defaults (lower for `:smooth`, where the penalty does the regular
 for `:exact` in two or more dimensions, where random points share cells more often);
 `gridsize` fixes the knot count outright. Both modes warn when the grid is the limit: `:exact`
 when the points could not all be matched, `:smooth` when the fitted smoothing would need a
-finer grid than the budget allows. The [scattered-data benchmark](../benchmarks/julia/scattered.qmd)
-has the convergence of both modes with the point count, and timings.
+finer grid than the budget allows.
+
+A third keyword, `bc`, sets the boundary rule of a `:smooth` fit on a uniform grid, as for the
+gridded interpolants on the [boundaries page](boundaries.qmd): `:poly`, the default, fits the
+kernel's full polynomial at each end, and `:quadratic` or `:linear` fit a lower degree. The
+default is the more accurate where the signal is steep at an end; where the data are flat at
+an end and noisy, the lower-degree rules are the remedy for an end that wanders. The rule can
+differ between the two ends of an axis, as a pair `(:poly, :linear)`, and between axes.
+
+The [scattered-data benchmark](../benchmarks/julia/scattered.qmd) compares both modes with
+the radial basis function and natural-neighbour packages on accuracy, time, and what the fit
+returns that they do not.

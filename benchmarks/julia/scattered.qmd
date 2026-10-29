@@ -208,18 +208,19 @@ end
 ```
 
 The two fits are the untuned rows; the ridge rows are the best the radial basis functions can
-do when the answer is used to choose their parameter. The adaptive grid places its knots where
-the fitted surface curves, and so spends them on the bumps; on Franke's function, whose
-features fill the square fairly evenly, it and the uniform grid are close, and the gain of the
-adaptive grid is largest on data with a steep layer, as the
-[smoothing benchmark](smoothing.qmd) and the [concept page](../../concepts/scattered.qmd) show.
-A hand-chosen ridge lands above the oracle rows; cross-validation lands where the fit's rows
-are, every time, without a choice to make.
+do when the answer is used to choose their parameter, and with that help they are ahead, by a
+tenth to a fifth of the error at every noise level. A hand-chosen ridge lands somewhere above
+the oracle rows; cross-validation lands where the fit's rows are, every time, without a choice
+to make. The adaptive grid places its knots where the fitted surface curves, and so spends them
+on the bumps; on Franke's function, whose features fill the square fairly evenly, that buys
+nothing over the uniform grid, and the gain of the adaptive grid is for data with a steep
+layer, as the [smoothing benchmark](smoothing.qmd) and the
+[concept page](../../concepts/scattered.qmd) show.
 
 ## Setup and query
 
 The time to construct an interpolant from the points, and the time to evaluate it on the
-test grid of `r length(xq)` points, for eight hundred and for 6400 points. The radial basis
+test grid of ten thousand points, for eight hundred and for 6400 points. The radial basis
 functions solve a dense system whose size is the number of points, and evaluate by summing over
 all of them; the natural-neighbour interpolants triangulate once and evaluate locally; the fit
 solves a sparse system on its grid once, or once per trial smoothing in `:smooth` mode, and
@@ -332,3 +333,5 @@ println("|:--|--:|--:|--:|")
 The accuracy of the three is the accuracy of the fit, from the table above at this point
 count, and the integral is the one quantity the noise does not spoil in `:smooth` mode either:
 smoothing changes the surface between the points, and integrating it averages that out.
+
+{{< include _versions.qmd >}}

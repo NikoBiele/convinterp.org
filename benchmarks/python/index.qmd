@@ -57,3 +57,5 @@ SciPy's interpolators are mature and general, and the comparisons are on the gro
 convolution kernels were designed for: uniform grids, smooth data, high accuracy. A method
 built for other ground — monotone data (`PchipInterpolator`), unstructured points
 (`griddata`, `RBFInterpolator`), extrapolation — is not worse for losing a comparison here.
+
+{{< include _versions.qmd >}}

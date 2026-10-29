@@ -106,3 +106,5 @@ sampled data. Chebyshev differentiation reaches its best accuracy with fewer sam
 rounding grows about $n^2$ per derivative order: for the third derivative it becomes worse
 than no interpolation at all. The cubic spline converges at $4 - k$ for the $k$-th derivative,
 so its third derivative is piecewise constant.
+
+{{< include _versions.qmd >}}

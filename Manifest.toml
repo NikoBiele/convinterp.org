@@ -2,7 +2,7 @@
 
 julia_version = "1.13.3"
 manifest_format = "2.1"
-project_hash = "e35676071d84ac8de76412ed092bcb1b255be06c"
+project_hash = "78f100a33a0768783848ba36d7883d8f2def27e8"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -379,10 +379,10 @@ version = "0.6.3"
 
 [[deps.ConvolutionInterpolations]]
 deps = ["LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "1220280e32bf3853f352b2a3cc896a414b3bc990"
+git-tree-sha1 = "66f5377b3188d38c8120c8098f9dda478543041a"
 registries = "General"
 uuid = "75b5ba44-29d7-490a-960d-52c835d47405"
-version = "1.0.0"
+version = "1.0.2"
 
 [[deps.CoreMath]]
 deps = ["CoreMath_jll"]

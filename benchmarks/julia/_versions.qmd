@@ -1,0 +1,13 @@
+```{julia}
+#| echo: false
+#| output: asis
+import Pkg
+deps = Pkg.dependencies()                                 # every package in the site's environment
+ver(name) = (i = findfirst(d -> d.name == name, collect(values(deps))); i === nothing ? "—" : string(collect(values(deps))[i].version))
+pkgs = ["ConvolutionInterpolations", "Interpolations", "BSplineKit", "Dierckx", "FastChebInterp",
+        "NumericalIntegration", "HCubature", "QuadGK", "ScatteredInterpolation", "NaturalNeighbours", "Chairmarks"]
+println("---")
+println()
+println("*Rendered with Julia ", VERSION, " on a ", Sys.cpu_info()[1].model, " machine (", Sys.CPU_THREADS,
+        " threads), with ", join((p * ".jl " * ver(p) for p in pkgs), ", "), ".*")
+```

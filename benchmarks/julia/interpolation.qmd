@@ -70,13 +70,16 @@ fig
 ```{julia}
 #| echo: false
 #| output: asis
-# the observed order between the two finest grids still clear of rounding
+# the observed order over the last refinement that is clear of the method's floor: both of its
+# errors at least ten times the error at the finest grid, so that a segment ending on the floor
+# is never measured; for a method that has not reached a floor, the last refinement of the study
 println("| | observed order | error at the finest grid |")
 println("|:--|--:|--:|")
 for (name, _) in methods_1d
     e = errs[name]
-    i = findlast(v -> v > 1e-13, e); i = max(i, 2)
-    @printf("| %s | %.2f | %.1e |\n", name, log(e[i-1] / e[i]) / log(hs[i-1] / hs[i]), e[end])
+    j = findlast(j -> e[j] > 10 * e[end], 2:length(e))
+    j = j === nothing ? length(e) : j + 1
+    @printf("| %s | %.2f | %.1e |\n", name, log(e[j-1] / e[j]) / log(hs[j-1] / hs[j]), e[end])
 end
 ```
 
@@ -210,3 +213,5 @@ depth of its curve is how far its order takes it. The spline of order 8 needs fe
 than `:b7` for a given error and reaches rounding later; the cubic B-spline and `:b5` cost the
 same per point, and `:b5` goes five decades deeper. The kernels are first to any accuracy down
 to rounding, which is the trade they were designed for.
+
+{{< include _versions.qmd >}}

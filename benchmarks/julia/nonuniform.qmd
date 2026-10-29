@@ -1,0 +1,233 @@
+---
+title: "Nonuniform grids"
+subtitle: "ConvolutionInterpolations.jl against Interpolations.jl, BSplineKit.jl and Dierckx.jl on nonuniform knots"
+engine: julia
+---
+
+Interpolation from samples whose spacing varies: the nonuniform convolution kernels against the
+methods of the other packages that accept arbitrary knots — the gridded linear interpolant of
+Interpolations.jl, the B-spline interpolants of BSplineKit.jl at cubic and high order, and the
+quintic FITPACK spline of Dierckx.jl — and against the package's own other route, which treats
+the samples as scattered points and fits a uniform-grid interpolant through them exactly
+(`fit_scattered` with `mode = :exact`). First the convergence order on jittered knots, which is
+the claim to verify: on nonuniform grids the `b` kernels converge at order degree + 1, so
+`:b13` is a 14th-order interpolant. Then the time to construct and to evaluate, and the two
+together.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages, the methods and the knots"
+using ConvolutionInterpolations
+import Interpolations                # qualified: exports `interpolate`, as BSplineKit does
+import BSplineKit
+import Dierckx
+using Chairmarks, Printf, Random, CairoMakie
+
+# each method maps a vector of knots x (uniform or not) and the values y to a callable
+# interpolant, in the element type of x — Float64 or BigFloat. Dierckx is Float64 only, so it
+# is given Float64 copies and evaluated in Float64 whatever it is asked for
+methods_1d = [
+    "Interpolations.jl linear" => (x, y) -> Interpolations.interpolate((x,), y, Interpolations.Gridded(Interpolations.Linear())),
+    "BSplineKit k=4"           => (x, y) -> BSplineKit.interpolate(x, y, BSplineKit.BSplineOrder(4)),
+    "BSplineKit k=8"           => (x, y) -> BSplineKit.interpolate(x, y, BSplineKit.BSplineOrder(8)),
+    "Dierckx k=5"              => (x, y) -> (s = Dierckx.Spline1D(Float64.(x), Float64.(y); k = 5); t -> s(Float64(t))),
+    "ConvInterp :n3"           => (x, y) -> convolution_interpolation(x, y; kernel = :n3),
+    "ConvInterp :b5"           => (x, y) -> convolution_interpolation(x, y; kernel = :b5),
+    "ConvInterp :b7"           => (x, y) -> convolution_interpolation(x, y; kernel = :b7),
+    "ConvInterp :b13"          => (x, y) -> convolution_interpolation(x, y; kernel = :b13),
+    # the samples as scattered points, fitted exactly by a uniform-grid interpolant (default :b5)
+    "fit_scattered :exact"     => (x, y) -> (f = convolution_interpolation(reshape(Float64.(x), 1, :), Float64.(y); mode = :exact); t -> f(Float64(t))),
+]
+
+runge(x) = 1 / (1 + 25x^2)                                # Runge's function, in the type of x
+
+# n knots on [-1, 1] in the element type T: uniform, or jittered — uniform knots moved by up to
+# ±15 % of the spacing, with the end knots fixed, which is nonuniform without any structure a
+# method could exploit. The jitter is drawn once in Float64 from a seeded generator and
+# widened, so the knots are the same numbers in every precision
+uniform(T, n) = collect(range(T(-1), T(1), length = n))
+function jittered(T, n)
+    x = uniform(T, n)
+    h = 2 / T(n - 1)
+    x[2:end-1] .+= 0.3h .* (T.(rand(MersenneTwister(1), n - 2)) .- 0.5)
+    x
+end
+
+# the largest error of every method on the fine points xr, for knots x
+function errors(x, xr)
+    y = runge.(x)
+    Dict(name => maximum(abs.(m(x, y).(xr) .- runge.(xr))) for (name, m) in methods_1d)
+end
+xr = range(-1.0, 1.0, length = 2001);                     # the fine points, in Float64
+```
+
+## The knots
+
+Forty-one knots, uniform and jittered, under the function they sample:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The two grids"
+fig = Figure(size = (800, 320))
+ax = Axis(fig[1, 1]; xlabel = "x", ylabel = "f(x)")
+lines!(ax, xr, runge.(xr); color = :black, label = "Runge's function")
+scatter!(ax, uniform(Float64, 41), fill(-0.08, 41); marker = :vline, markersize = 14, label = "uniform knots")
+scatter!(ax, jittered(Float64, 41), fill(-0.18, 41); marker = :vline, markersize = 14, label = "jittered knots")
+Legend(fig[1, 2], ax)
+fig
+```
+
+## Convergence order
+
+The largest error against Runge's function as the number of jittered knots doubles, in
+`Float64` on the left and in `BigFloat` at 128 bits on the right, with reference lines of
+slope 6 through `:b5` and slope 14 through `:b13`. On a uniform grid the `b` kernels are
+designed for 7th-order convergence, whatever their degree. On a nonuniform grid their weights
+are built per interval, by projecting the kernel onto polynomial reproduction up to the
+kernel's full degree, and the convergence order becomes degree + 1: 6 for `:b5`, 8 for `:b7`,
+14 for `:b13`. In `Float64` every method stops at rounding, and the question is which gets
+there first; the Julia package is generic over the element type, so the same study in
+`BigFloat` shows the orders over the whole range. Dierckx is `Float64` only and stays at its
+floor on the right.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The convergence study"
+ns = [21, 41, 81, 161, 321, 641, 1281, 2561, 5121]
+errs_f = [errors(jittered(Float64, n), xr) for n in ns]
+errs_b = setprecision(BigFloat, 128) do
+    xr_b = range(big(-1), big(1), length = 2001)
+    [errors(jittered(BigFloat, n), xr_b) for n in ns]
+end
+
+# reference lines anchored at 41 knots, where the kernels are past their coarsest-grid behaviour
+ref(e41, p) = e41 .* (40 ./ (ns .- 1)) .^ p
+
+fig = Figure(size = (800, 520))
+ax1 = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "knots", ylabel = "largest error", title = "Float64")
+ax2 = Axis(fig[1, 2]; xscale = log10, yscale = log10, xlabel = "knots", title = "BigFloat, 128 bits")
+for (ax, errs, floor) in ((ax1, errs_f, 1e-17), (ax2, errs_b, 1e-36))
+    for (name, _) in methods_1d
+        scatterlines!(ax, ns, [max(Float64(e[name]), floor) for e in errs]; markersize = 8, label = name)
+    end
+    lines!(ax, ns, max.(ref(Float64(errs[2]["ConvInterp :b5"]), 6), floor); color = :black, linestyle = :dash, label = "slope 6")
+    lines!(ax, ns, max.(ref(Float64(errs[2]["ConvInterp :b13"]), 14), floor); color = :black, linestyle = :dot, label = "slope 14")
+end
+Legend(fig[2, 1:2], ax1; orientation = :horizontal, nbanks = 3)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+# the observed order in BigFloat, over the last doubling that is clear of the method's floor:
+# both of its errors at least ten times the error at the finest grid, so that a segment ending
+# on the floor is never measured. For a method that has not reached a floor this is the last
+# doubling of the study
+println("| | observed order | error at the finest grid |")
+println("|:--|--:|--:|")
+for (name, _) in methods_1d
+    e = [Float64(er[name]) for er in errs_b]
+    j = findlast(j -> e[j] > 10 * e[end], 2:length(e))
+    j = j === nothing ? length(e) : j + 1
+    @printf("| %s | %.2f | %.1e |\n", name, log(e[j-1] / e[j]) / log((ns[j] - 1) / (ns[j-1] - 1)), e[end])
+end
+```
+
+In `Float64`, `:b13` and the order-eight B-spline reach rounding on the same grid, with `:b7`
+two doublings behind; the 14th order shows only as a steeper approach to a floor every method
+reaches. In `BigFloat` the orders show in full: `:b13` on slope 14, `:b5` on slope 6, `:b7`
+on 8 between them, with the order-eight B-spline tracking `:b7`; the cubic methods converge at
+their cubic rate and the linear interpolant at  its second. The order column is measured in
+`BigFloat`, over the last doubling that is clear of each method's floor, so the `Float64`-only
+methods are measured before theirs.
+
+## Setup and query
+
+The time to construct an interpolant on jittered knots and the time to evaluate it on the two
+thousand fine points, in `Float64`, for 201 and for 801 knots. On a nonuniform grid the
+convolution kernels compute the weights of every interval at construction, in extended
+precision, so their setup is where the cost goes; evaluation is then the same constant-time
+stencil as on a uniform grid.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings"
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) :
+         t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1    ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t)
+
+function timings(n)
+    x = jittered(Float64, n); y = runge.(x)
+    Dict(name => (itp = m(x, y); (setup = (@b $m($x, $y)).time, query = (@b $itp.($xr)).time)) for (name, m) in methods_1d)
+end
+t201 = timings(201)
+t801 = timings(801);
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | setup, 201 knots | query, 201 knots | setup, 801 knots | query, 801 knots |")
+println("|:--|--:|--:|--:|--:|")
+for (name, _) in methods_1d
+    println("| ", name, " | ", fmt(t201[name].setup), " | ", fmt(t201[name].query), " | ",
+            fmt(t801[name].setup), " | ", fmt(t801[name].query), " |")
+end
+```
+
+## Time to accuracy
+
+Each method's time to construct on jittered knots and evaluate on the fine points, in
+`Float64`, against its largest error there, as the knots are refined.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The work–precision study"
+ns_w = ns[1:7]
+wp = map(ns_w) do n
+    x = jittered(Float64, n); y = runge.(x)
+    Dict(name => (itp = m(x, y);
+                  (err = maximum(abs.(itp.(xr) .- runge.(xr))),
+                   time = (@b $m($x, $y)).time + (@b $itp.($xr)).time)) for (name, m) in methods_1d)
+end
+
+fig = Figure(size = (800, 440))
+ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "time to construct and evaluate [s]", ylabel = "largest error")
+for (name, _) in methods_1d
+    scatterlines!(ax, [w[name].time for w in wp], [max(w[name].err, 1e-17) for w in wp]; markersize = 8, label = name)
+end
+Legend(fig[1, 2], ax)
+fig
+```
+
+The extended-precision construction of the nonuniform weights is the price of the kernels'
+order, and in `Float64` it is not worth paying for interpolation alone: the B-splines reach
+every accuracy down to rounding in four orders of magnitude less time, since their
+construction is a banded solve in the working precision, and the splines of BSplineKit.jl
+are the better choice for a nonuniform grid in `Float64`. Within this package, the scattered
+fit is the better route to the same data: its construction is a sparse solve of the size of
+the data, its interpolant lives on a uniform grid and evaluates on the fast path, the fastest
+query of any method here, and on time to accuracy it sits roughly between the two spline packages
+until its floor, which is set by the conditioning of the fit's collocation system rather than
+by the kernel. The nonuniform kernels earn their cost in two other places. Beyond `Float64`,
+where the order is what counts: every method
+needs more than a thousand knots on this function before its error passes below `Float64`
+rounding, and from there the gap between `:b13` and the order-eight spline widens with every
+doubling, as the right panel of the convergence study shows. And as the basis
+of `fit_scattered` on an adaptive grid, where the knots are few and chosen by the fit, and 
+the higher order on nonuniform knots is what lets the adaptive grid beat the uniform one at
+equal knot count — the [scattered-data page](../../concepts/scattered.qmd) shows that comparison.
+The construction is paid once per grid; evaluation is the kernels' constant-time stencil,
+within a factor of two of the fastest method here.
+
+## What the nonuniform kernels do not do
+
+The nonuniform path interpolates and differentiates — derivatives up to the kernel's range,
+as on uniform grids — but has no antiderivatives, takes the kernel's own boundary extension as
+its only boundary rule, and offers the `b` kernels and `:n3` only, not `:a4`, `:a5` or `:a7`.
+In several dimensions each axis chooses its own path, so a grid uniform along some axes and
+nonuniform along others costs the nonuniform construction only on the latter. The
+[concept page](../../concepts/nonuniform.qmd) has the details.
+
+{{< include _versions.qmd >}}

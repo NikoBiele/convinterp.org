@@ -190,3 +190,5 @@ interpolators search the knots. The kernel weights are exact polynomials, evalua
 whole stencil at once in compiled, vectorized Rust. The bars show what that is worth: compare
 `"a4"` with the cubic spline, and the b-series kernels with the degree-5 and degree-7 splines,
 at comparable orders of accuracy.
+
+{{< include _versions.qmd >}}

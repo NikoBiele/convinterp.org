@@ -247,3 +247,5 @@ None of this is specific to a grid. The same `fit_scattered` call takes points a
 any number of dimensions, and returns an interpolant with its derivatives and integrals; the
 [scattered-data benchmark](scattered.qmd) is that comparison, where the smoothing splines have
 no counterpart.
+
+{{< include _versions.qmd >}}

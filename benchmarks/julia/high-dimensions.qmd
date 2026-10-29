@@ -1,0 +1,242 @@
+---
+title: "High dimensions"
+subtitle: "ConvolutionInterpolations.jl against Interpolations.jl on grids of two to five dimensions"
+engine: julia
+---
+
+Interpolation on tensor-product grids as the number of dimensions grows: the convolution
+kernels against the linear and cubic B-spline interpolants of Interpolations.jl, the one other
+package that interpolates on grids in any dimension. A separable kernel of width $w$ per axis
+touches $w^N$ grid values per evaluation, so the cost of a wide kernel grows fast with the
+dimension while its accuracy does not: this page measures both. First the cost and the
+accuracy of every method at the same per-axis resolution from two to five dimensions, then
+convergence and time to accuracy in three dimensions, and finally lazy construction, which
+is what makes large grids in many dimensions affordable to build at all.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Packages, the methods and the test function"
+using ConvolutionInterpolations
+import Interpolations
+using Chairmarks, Printf, Random, CairoMakie
+
+# the test function: the N-dimensional Runge function with a mild parameter, non-separable and
+# smooth on [-1, 1]^N, so that the coarse grids a high-dimensional study can afford resolve it
+f(x...) = 1 / (1 + sum(abs2, x))
+
+# the grid: n knots per axis on [-1, 1], in N dimensions, and the values on it
+axes_nd(N, n) = ntuple(_ -> range(-1.0, 1.0, length = n), N)
+values_nd(N, n) = [f(x...) for x in Iterators.product(axes_nd(N, n)...)]
+
+# each method maps the axes and the values to a callable interpolant of N arguments; the
+# stencil width per axis is what the cost per evaluation grows with, as width^N
+methods_nd = [
+    "Interpolations.jl linear" => (ax, v) -> Interpolations.scale(Interpolations.interpolate(v, Interpolations.BSpline(Interpolations.Linear())), ax...),
+    "Interpolations.jl cubic"  => (ax, v) -> Interpolations.scale(Interpolations.interpolate(v, Interpolations.BSpline(Interpolations.Cubic(Interpolations.Line(Interpolations.OnGrid())))), ax...),
+    "ConvInterp :a3"           => (ax, v) -> convolution_interpolation(ax, v; kernel = :a3),
+    "ConvInterp :a4"           => (ax, v) -> convolution_interpolation(ax, v; kernel = :a4),
+    "ConvInterp :b5"           => (ax, v) -> convolution_interpolation(ax, v; kernel = :b5),
+    "ConvInterp :b7"           => (ax, v) -> convolution_interpolation(ax, v; kernel = :b7),
+]
+width = Dict("Interpolations.jl linear" => 2, "Interpolations.jl cubic" => 4, "ConvInterp :a3" => 4,
+             "ConvInterp :a4" => 6, "ConvInterp :b5" => 10, "ConvInterp :b7" => 12)
+
+# m random test points inside the grid, as an N × m matrix, and the exact values there; the
+# points stay two percent clear of the boundary, so that the methods' different boundary rules
+# do not decide the error
+function testpoints(N, m)
+    P = 0.98 .* (2 .* rand(MersenneTwister(1), N, m) .- 1)
+    (P = P, exact = [f(p...) for p in eachcol(P)])
+end
+
+# evaluate an interpolant at every column of P
+evalpts(itp, P) = [itp(p...) for p in eachcol(P)]
+
+fmt(t) = t < 1e-6 ? @sprintf("%.0f ns", 1e9 * t) : t < 1e-3 ? @sprintf("%.1f μs", 1e6 * t) :
+         t < 1 ? @sprintf("%.2f ms", 1e3 * t) : @sprintf("%.2f s", t);
+```
+
+## Cost and accuracy against dimension
+
+Sixteen knots per axis, from two dimensions (256 grid values) to five (a million), every
+method built on the same grids and evaluated at ten thousand random points. The time to
+construct, the time per evaluation, and the largest error against the function.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The dimension study"
+Ns = 2:5
+n_axis = 16
+m_test = 10_000
+res = Dict()                                              # (name, N) => (setup, query per point, error)
+for N in Ns
+    ax = axes_nd(N, n_axis); v = values_nd(N, n_axis)
+    tp = testpoints(N, m_test)
+    for (name, m) in methods_nd
+        itp = m(ax, v)
+        res[(name, N)] = (setup = (@b $m($ax, $v)).time,
+                          query = (@b evalpts($itp, $(tp.P))).time / m_test,
+                          err   = maximum(abs.(evalpts(itp, tp.P) .- tp.exact)))
+    end
+end
+
+fig = Figure(size = (800, 440))
+ax1 = Axis(fig[1, 1]; yscale = log10, xlabel = "dimension", ylabel = "time per evaluation [s]", xticks = Ns)
+for (name, _) in methods_nd
+    scatterlines!(ax1, Ns, [res[(name, N)].query for N in Ns]; markersize = 8, label = name)
+end
+Legend(fig[1, 2], ax1)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| time per evaluation | stencil | ", join(("$(N)D" for N in Ns), " | "), " |")
+println("|:--|--:|", "--:|"^length(Ns))
+for (name, _) in methods_nd
+    println("| ", name, " | ", width[name], "ᴺ | ", join((fmt(res[(name, N)].query) for N in Ns), " | "), " |")
+end
+println()
+println("| construction | ", join(("$(N)D" for N in Ns), " | "), " |")
+println("|:--|", "--:|"^length(Ns))
+for (name, _) in methods_nd
+    println("| ", name, " | ", join((fmt(res[(name, N)].setup) for N in Ns), " | "), " |")
+end
+println()
+println("| largest error | ", join(("$(N)D" for N in Ns), " | "), " |")
+println("|:--|", "--:|"^length(Ns))
+for (name, _) in methods_nd
+    println("| ", name, " | ", join((@sprintf("%.1e", res[(name, N)].err) for N in Ns), " | "), " |")
+end
+```
+
+In two and three dimensions every method evaluates in a few hundred nanoseconds and the
+stencil hardly matters. From four dimensions it decides everything: the cost per evaluation
+follows the stencil's $w^N$, so the wide kernels fall two orders of magnitude behind the cubic
+B-spline in five dimensions, and `:a3`, which has the cubic's stencil, evaluates somewhat
+slower than it. The accuracy, by contrast, does not depend on the dimension at all: a tensor
+product keeps each axis's order, so at a fixed per-axis resolution each method's error is the
+same number from two dimensions to five, and the order shows as the ratio between the rows —
+`:b7` two orders of magnitude below the cubic, `:a4` one, `:a3` level with it. Which is the
+trade of the page: in many dimensions, order costs $w^N$ per point and buys the same accuracy
+it buys in one — which is why the default kernel narrows with the dimension, from `:b7` in
+one and two dimensions to `:b5` in three and `:a4` in four and five.
+
+## Convergence and time to accuracy in three dimensions
+
+Three dimensions, from 11 to 81 knots per axis, each method evaluated at a hundred thousand
+random points. Left, the largest error as the grid is refined; right, the time to construct
+and to evaluate at the hundred thousand points against that error, which is the cost of a
+given accuracy when the interpolant is used in earnest.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The three-dimensional study"
+ns3 = [11, 21, 41, 81]
+tp3 = testpoints(3, 100_000)
+res3 = Dict()                                             # (name, n) => (time to construct and evaluate, error)
+for n in ns3
+    ax = axes_nd(3, n); v = values_nd(3, n)
+    for (name, m) in methods_nd
+        itp = m(ax, v)
+        res3[(name, n)] = (time = (@b $m($ax, $v)).time + (@b evalpts($itp, $(tp3.P))).time,
+                           err  = maximum(abs.(evalpts(itp, tp3.P) .- tp3.exact)))
+    end
+end
+
+hs3 = 2 ./ (ns3 .- 1)
+fig = Figure(size = (800, 520))
+ax1 = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true, xlabel = "spacing h", ylabel = "largest error")
+ax2 = Axis(fig[1, 2]; xscale = log10, yscale = log10, xlabel = "time to construct and evaluate [s]")
+linkyaxes!(ax1, ax2)
+for (name, _) in methods_nd
+    scatterlines!(ax1, hs3, [res3[(name, n)].err for n in ns3]; markersize = 8, label = name)
+    scatterlines!(ax2, [res3[(name, n)].time for n in ns3], [res3[(name, n)].err for n in ns3]; markersize = 8)
+end
+Legend(fig[2, 1:2], ax1; orientation = :horizontal, nbanks = 2)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| largest error | ", join(("$(n)³" for n in ns3), " | "), " |")
+println("|:--|", "--:|"^length(ns3))
+for (name, _) in methods_nd
+    println("| ", name, " | ", join((@sprintf("%.1e", res3[(name, n)].err) for n in ns3), " | "), " |")
+end
+println()
+println("| time to construct and evaluate | ", join(("$(n)³" for n in ns3), " | "), " |")
+println("|:--|", "--:|"^length(ns3))
+for (name, _) in methods_nd
+    println("| ", name, " | ", join((fmt(res3[(name, n)].time) for n in ns3), " | "), " |")
+end
+```
+
+The time is dominated by the hundred thousand evaluations, so the right panel is the cost per
+point against the order. On the coarsest grid the cubic B-spline is the most accurate method
+per millisecond. From the next grid on, the picture inverts: `:a4`, `:b5` and `:b7` reach
+accuracies on 21³ and 41³ that the cubic does not reach on 81³, in a fraction of the time it
+takes there, because the cost per point grows with the stencil only once while the error falls
+with the order at every refinement. For an accuracy of one part in ten thousand or better in
+three dimensions, the kernels are the faster route; for a rough interpolant, the splines are.
+
+## Lazy construction
+
+An eager interpolant copies the data into an array padded with ghost values along every axis,
+and the ghost values are the construction cost; a lazy one stores the data as they are and
+forms the ghost values it needs when a point near the boundary is evaluated. The same ghost
+values, so the two agree to rounding everywhere; the difference is where the work is done.
+Three grids with `:b7`, eager against lazy construction time, and which of the two the
+default chooses:
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Eager against lazy construction"
+cases = [(3, 100), (4, 30), (5, 12)]
+lz = map(cases) do (N, n)
+    ax = axes_nd(N, n); v = values_nd(N, n)
+    (N = N, n = n,
+     eager = (@b convolution_interpolation($ax, $v; kernel = :b7, lazy = false)).time,
+     lazy  = (@b convolution_interpolation($ax, $v; kernel = :b7, lazy = true)).time,
+     default = convolution_interpolation(ax, v; kernel = :b7).itp.lazy isa Val{true} ? "lazy" : "eager")
+end;
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| grid | eager | lazy | speedup | default |")
+println("|:--|--:|--:|--:|:--|")
+for c in lz
+    @printf("| %dD %d%s | %s | %s | %.0f× | %s |\n", c.N, c.n, ("", "", "³", "⁴", "⁵")[c.N], fmt(c.eager), fmt(c.lazy), c.eager / c.lazy, c.default)
+end
+```
+
+Lazy construction costs microseconds whatever the grid, since nothing is copied, while eager
+construction grows with the number of ghost values, which grows with the dimension and the
+kernel's width. The default, `lazy = nothing`, builds eagerly until eager construction would
+exceed either of two limits — $2^{27}$ values in the padded array, which is a gigabyte in
+`Float64`, or $2^{24}$ ghost values, which is about a second of construction — and lazily
+beyond them, so the three grids here are built eagerly by default, and a user who constructs
+many interpolants or evaluates few points sets `lazy = true` and pays nothing at construction.
+Evaluation in the interior is the same in both modes; near the boundary a lazy interpolant
+computes its ghost values on the fly, so eager is the faster choice when boundary cells are
+evaluated often.
+
+## Choosing a kernel in many dimensions
+
+- The default kernel follows the dimension for this reason: `:b7` in one and two dimensions,
+  `:b5` in three, `:a4` in four and five, `:a3` from six — the widest kernel whose stencil is
+  still cheap at that dimension.
+- Where more accuracy is wanted than the default gives, a wider kernel buys it at the
+  stencil's $w^N$ per evaluation, which the tables above put in numbers; where speed is
+  wanted, `:a3` has the cubic B-spline's stencil and `:a1` the cheapest.
+- Build large grids lazily; the default does so beyond its limits, and `lazy = true` always
+  works.
+- A grid uniform along some axes and nonuniform along others, or with different kernels per
+  axis, costs each axis its own kernel's width and no more; the
+  [concept page](../../concepts/interpolation.qmd) has the per-axis keywords.
+
+{{< include _versions.qmd >}}

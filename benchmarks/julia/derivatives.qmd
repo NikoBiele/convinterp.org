@@ -93,9 +93,13 @@ fig
 ```{julia}
 #| echo: false
 #| output: asis
+# the order over the last refinement that is clear of the method's floor: both of its errors at
+# least ten times the error at the finest grid, so that a segment ending on the floor is never
+# measured; for a method that has not reached a floor, the last refinement of the study
 function observed(e)
-    i = findlast(v -> v > 1e-11, e); i = max(i, 2)        # the finest grid still clear of rounding
-    log(e[i-1] / e[i]) / log(hs[i-1] / hs[i])
+    j = findlast(j -> e[j] > 10 * e[end], 2:length(e))
+    j = j === nothing ? length(e) : j + 1
+    log(e[j-1] / e[j]) / log(hs[j-1] / hs[j])
 end
 println("| observed order | derivative 1 | derivative 2 | derivative 3 |")
 println("|:--|--:|--:|--:|")
@@ -105,10 +109,13 @@ for (name, _) in methods
 end
 ```
 
-Every method loses about one order per derivative: the cubic ones from 4th order down to a
-piecewise-constant third derivative, Dierckx's quintic and `:b5` from 6th, BSplineKit at
-order 8 and `:b7` from their interpolation order. The rounding floor of a derivative rises with
-the number of samples, as $1/h^m$, which is the price of differentiating sampled data and
+Every method loses about one order per derivative: the cubic B-spline of BSplineKit.jl from
+4th order down to a piecewise-constant third derivative, Dierckx's quintic and `:b5` from 6th,
+BSplineKit at order 8 and `:b7` from their interpolation order. The cubic of Interpolations.jl
+is the exception at the second derivative: its boundary condition is the natural spline's,
+which sets the second derivative to zero at the ends, so the largest error of that derivative
+is at the boundary and does not fall with the grid. The rounding floor of a derivative rises with the
+number of samples, as $1/h^m$, which is the price of differentiating sampled data and
 the same for every method.
 
 ## Query time
@@ -180,3 +187,5 @@ fig
 The picture is the interpolation page's, one order down: the curves are nearly vertical, so
 each method's position is its cost per point and its depth is what its order buys, and the
 kernels are first to any accuracy of the derivative down to its rounding floor.
+
+{{< include _versions.qmd >}}

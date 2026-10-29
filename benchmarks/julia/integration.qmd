@@ -141,11 +141,15 @@ fig
 ```{julia}
 #| echo: false
 #| output: asis
-# the observed order between the two finest grids of each case, for every method
+# the observed order over the last refinement of each case that is clear of the method's floor:
+# both of its errors at least ten times the error at the finest grid, so that a segment ending
+# on the floor is never measured; for a method that has not reached a floor, the last refinement
 function observed(errs, ns, name)
     e = errs[name]
-    h1, h2 = 1 / (ns[end-1] - 1), 1 / (ns[end] - 1)
-    return log(max(e[end-1], 1e-17) / max(e[end], 1e-17)) / log(h1 / h2)
+    j = findlast(j -> e[j] > 10 * e[end], 2:length(e))
+    j = j === nothing ? length(e) : j + 1
+    h1, h2 = 1 / (ns[j-1] - 1), 1 / (ns[j] - 1)
+    return log(max(e[j-1], 1e-17) / max(e[j], 1e-17)) / log(h1 / h2)
 end
 cases = [("1D", errs_1d, ns_1d), ("2D", errs_2d, ns_2d), ("3D", errs_3d, ns_3d), ("2D non-separable", errs_2n, ns_2d)]
 println("| Observed order | ", join(first.(cases), " | "), " |")
@@ -155,8 +159,8 @@ for (name, _) in methods
 end
 ```
 
-An order near zero on the finest grids means the method has reached rounding, not that it has
-stopped converging; the curves show which.
+Each order is measured on the last refinement before the method's floor, so a method that has
+reached rounding is reported at the rate it converged, not at the floor.
 
 ## Scattered points
 
@@ -274,3 +278,5 @@ The query column is the point: once the interpolant exists, an integral over any
 microseconds whatever the grid, in any dimension. The setup grows with the grid, as any
 interpolant's does, and the 3D rows show it is still the only route with a reusable setup
 there.
+
+{{< include _versions.qmd >}}

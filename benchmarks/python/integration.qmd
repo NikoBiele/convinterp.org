@@ -223,3 +223,5 @@ Integrals cost about as much as the interpolant itself: the contribution of ever
 a point is precomputed when the interpolant is built, so each evaluation is one stencil sum
 plus a short polynomial, whatever the number of knots. SciPy's antiderivatives are splines of
 one degree higher, evaluated like any spline, so they cost what the splines cost.
+
+{{< include _versions.qmd >}}

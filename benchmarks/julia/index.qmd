@@ -18,8 +18,8 @@ exactly what was run.
 | [Derivatives](derivatives.qmd) | Interpolations.jl, BSplineKit.jl, Dierckx.jl |
 | [Integration](integration.qmd) | BSplineKit.jl, Dierckx.jl, NumericalIntegration.jl |
 | [Nonuniform grids](nonuniform.qmd) | Interpolations.jl, BSplineKit.jl, Dierckx.jl |
-| [Smoothing](smoothing.qmd) | the package's own Gaussian, and smoothing splines |
-| [Scattered data](scattered.qmd) | ScatteredInterpolation.jl, radial basis functions |
+| [Smoothing](smoothing.qmd) | the package's own Gaussian, BSplineKit.jl, Dierckx.jl, FastChebInterp.jl |
+| [Scattered data](scattered.qmd) | ScatteredInterpolation.jl, NaturalNeighbours.jl |
 | [High dimensions](high-dimensions.qmd) | Interpolations.jl |
 
 The Julia package is the reference implementation and has every feature, so these pages cover
@@ -64,3 +64,5 @@ discontinuities — is not worse for losing a comparison here. Where a competito
 counterpart for a capability (analytic integrals in constant time, exact scattered-data
 interpolation with derivatives and integrals), the page says so rather than inventing a
 comparison.
+
+{{< include _versions.qmd >}}

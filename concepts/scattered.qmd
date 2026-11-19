@@ -204,6 +204,70 @@ default is the more accurate where the signal is steep at an end; where the data
 an end and noisy, the lower-degree rules are the remedy for an end that wanders. The rule can
 differ between the two ends of an axis, as a pair `(:poly, :linear)`, and between axes.
 
+A fourth keyword, `q`, is the order of the roughness that both modes minimise, and it is what
+"smoothest" means on this page. Roughness is measured by the `q`-th differences of the knot
+values; the default is 5, except for an exact fit in one dimension, where it follows the
+kernel. From two dimensions up the two modes measure it differently. `:smooth` takes the
+differences along each axis. `:exact` takes every difference of total order `q`, the mixed
+ones across the axes included, which treats all directions alike. That is the measure the
+polyharmonic splines minimise, and it decides what the fit does in the gaps between the
+points, where most of the grid lies in several dimensions. It favours features without a
+preferred direction: for a signal that is a product of one-dimensional factors, differences
+along the axes would be the better measure, and the exact fit is somewhat less accurate there.
+
+## Solving an exact fit
+
+An exact fit is the smoothest grid that passes through the points, and the `solver` keyword
+chooses how it is found. `:cholesky` factorizes a sparse system in the knot values. It is
+cheap in one and two dimensions, but from three on the factorization fills in, and its memory
+and time grow steeply with the grid. `:dual` finds the grid of `:cholesky`, to within the
+tolerance of its iteration, from a dense system with one unknown per data point, so its cost
+follows the number of points and not the grid, which is what makes exact fits practical in
+four dimensions and above. `:qr` is a slower sparse
+least-squares solve that lowers the roundoff floor of the wide kernels; it is for chasing the
+last digits with `kernel = :b7`, and its memory limits it to small grids from three
+dimensions up.
+
+The default, `solver = :auto`, uses `:cholesky` in one and two dimensions and `:dual` from
+three. `:dual` needs a uniform grid, `Float64` data, and more points than there are
+polynomials of total degree below `q`, so an adaptive grid, `BigFloat` data or a handful of
+points stay with `:cholesky` in any dimension. The dense system of `:dual` takes 8 bytes per
+pair of points; before using it, `:auto` checks that it fits in the machine's memory and
+raises an error if it does not, while `solver = :dual` given explicitly is used unchecked.
+Duplicated points are the other limit: `:cholesky` resolves conflicting values in the
+least-squares sense, while `:dual` warns, and the returned violation shows that the data were
+not reproduced.
+
+The two solvers on the same thousand trusted points in three dimensions:
+
+```{julia}
+Random.seed!(3)
+f3(x, y, z) = sin(3x) * cos(2y) * exp(-z)                 # a smooth signal in three dimensions
+pts3 = rand(3, 1000)                                      # 1000 trusted points in the unit cube
+vals3 = [f3(p...) for p in eachcol(pts3)]                 # the signal at the points
+
+warm = (pts3[:, 1:200], vals3[1:200])                     # a small fit compiles each solver,
+fit_scattered(warm...; mode = :exact, solver = :cholesky) # so that the timings below
+fit_scattered(warm...; mode = :exact, solver = :dual)     # measure the solve alone
+
+res_c = @timed fit_scattered(pts3, vals3; mode = :exact, solver = :cholesky)   # sparse, grid unknowns
+res_d = @timed fit_scattered(pts3, vals3; mode = :exact, solver = :dual)       # dense, point unknowns
+(kc, vc, viol_c), (kd, vd, viol_d) = res_c.value, res_d.value;                 # knots, values, violation
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | `:cholesky` | `:dual` |")
+println("|:--|--:|--:|")
+@printf("| time (s) | %.2f | %.2f |\n", res_c.time, res_d.time)
+@printf("| allocated (GB) | %.2f | %.2f |\n", res_c.bytes / 2^30, res_d.bytes / 2^30)
+@printf("| largest deviation at the points | %.1e | %.1e |\n", viol_c, viol_d)
+println()
+@printf("The two grids differ by at most %.1e relative to the largest knot value.\n",
+        maximum(abs, vc .- vd) / maximum(abs, vc))
+```
+
 The [scattered-data benchmark](../benchmarks/julia/scattered.qmd) compares both modes with
 the radial basis function and natural-neighbour packages on accuracy, time, and what the fit
 returns that they do not.

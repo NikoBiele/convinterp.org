@@ -19,18 +19,25 @@ tracks the port.
 
 ## The kernels
 
-Two kinds of nonuniform kernel are available:
+Three kinds of kernel work on a nonuniform grid:
 
-- `:n3` is the nonuniform cubic, the counterpart of `:a3`: closed-form weights, a four-wide
-  stencil and no precomputation, so it costs about what the uniform cubic costs. It is the
-  default on nonuniform grids.
 - `:b5` to `:b13` are the nonuniform counterparts of the high-order kernels. They converge at
-  order degree + 1 — `:b5` at 6th order and `:b13` at 14th — and provide derivatives up to 7th
-  order. Their weights are projected onto each interval in exact rational arithmetic when the
-  interpolant is built, so construction costs one projection per interval and grows with the
-  number of intervals; evaluation is as local as on a uniform grid.
+  order degree + 1, so `:b5` at 6th order and `:b13` at 14th, and they provide derivatives up
+  to order degree − 2, the last continuous one: 3 for `:b5`, 5 for `:b7`, and so on up to 11
+  for `:b13`. Their weights are projected onto each interval in exact rational arithmetic when
+  the interpolant is built, so construction costs one projection per interval and grows with
+  the number of intervals; evaluation is as local as on a uniform grid.
+- `:n3` is the nonuniform cubic, the counterpart of `:a3`: closed-form weights, a four-wide
+  stencil and no precomputation, so it costs about what the uniform cubic costs. It
+  interpolates only; derivatives need a `:b` kernel. The two names are interchangeable, and
+  the grid decides which form is used.
+- `:a0` and `:a1`, nearest-neighbour and linear interpolation, work on any grid.
 
-The uniform `:a` kernels other than `:a3` have no nonuniform counterpart.
+A grid with a nonuniform axis uses either `:b` kernels on every axis, which may differ from
+axis to axis, or one of the other kernels on all axes. The default is the same as on a uniform
+grid up to three dimensions, `:b7` in one and two and `:b5` in three; from four dimensions it
+is `:n3`, where a uniform grid uses `:a4`. The other `:a` kernels, `:a4`, `:a5` and `:a7`, are
+for uniform grids only.
 
 ## A first example
 
@@ -143,11 +150,138 @@ println("|:--|--:|--:|")
 The precomputation of the `:b` kernels is per interval and per axis, so it stays cheap on a
 tensor-product grid: a 1000 × 1000 grid needs two thousand projections, not a million.
 
+## Targeted refinement
+
+Because the `:b` weights belong to the intervals, a nonuniform grid can be refined in place.
+`convolution_suggest` estimates the error of a one-dimensional `:b` interpolant interval by
+interval, from the knots and values alone, and returns the midpoints of the intervals where
+the estimate exceeds `tol`, a fraction of the range of the data. `convolution_refine` takes
+those points and the data there and returns the interpolant on the merged knots. It computes
+only the weights that the new knots touch: an interval keeps its weights unless one of the M
+knots on either side of it is new, with M = 5 for `:b5` up to 9 for `:b13`, so the cost of a
+new knot does not grow with the grid.
+
+Runge's function on a coarse irregular grid with `:b13`, refined by repeating the two until
+nothing is suggested, and for comparison by adding the midpoint of every interval at each
+pass, until that run is as accurate:
+
+```{julia}
+x0 = [-1.0, -0.86, -0.71, -0.58, -0.44, -0.33, -0.21, -0.1, 0.0,
+      0.12, 0.22, 0.35, 0.47, 0.6, 0.73, 0.87, 1.0]       # a coarse irregular knot vector
+maxerr(f, itp, xs) = maximum(abs, itp.(xs) .- f.(xs))     # the largest error of itp at xs
+itp0 = convolution_interpolation(x0, runge.(x0); kernel = :b13)  # the coarse interpolant
+
+# refine where convolution_suggest estimates the error above tol, until nothing is
+# suggested or the passes run out; returns the interpolant, its knots, and the knot count
+# and the largest error at xs after each pass
+function refine_targeted(f, itp, x, xs; tol = 1e-6, passes = 30)
+    counts, errs = [length(x)], [maxerr(f, itp, xs)]      # the state before refining
+    for pass in 1:passes                                  # a limit on the passes
+        x_new = convolution_suggest(itp; tol)             # midpoints of intervals above tol
+        isempty(x_new) && break                           # the estimate is below tol everywhere
+        itp = convolution_refine(itp, x_new, f.(x_new))   # knots added there
+        x = sort(vcat(x, x_new))                          # the knots of the refined interpolant
+        push!(counts, length(x))                          # its knot count
+        push!(errs, maxerr(f, itp, xs))                   # and its error
+    end
+    return itp, x, counts, errs
+end
+
+# add the midpoint of every interval at each pass, until the largest error at xs is at most
+# target or the passes run out; returns the same as refine_targeted
+function refine_everywhere(f, itp, x, xs, target; passes = 8)
+    counts, errs = [length(x)], [maxerr(f, itp, xs)]      # the state before refining
+    for pass in 1:passes                                  # a limit, as each pass doubles the knots
+        last(errs) <= target && break                     # as accurate as the target
+        x_new = (x[1:end-1] .+ x[2:end]) ./ 2             # the midpoint of every interval
+        itp = convolution_refine(itp, x_new, f.(x_new))   # knots added everywhere
+        x = sort(vcat(x, x_new))                          # the knots of the refined interpolant
+        push!(counts, length(x))                          # its knot count
+        push!(errs, maxerr(f, itp, xs))                   # and its error
+    end
+    return itp, x, counts, errs
+end
+
+itp_t, x_t, counts_t, errs_t = refine_targeted(runge, itp0, x0, xr)               # targeted run
+itp_u, x_u, counts_u, errs_u = refine_everywhere(runge, itp0, x0, xr, last(errs_t))  # untargeted
+
+x_added = setdiff(x_t, x0)                                # the knots the targeted run added
+knot_style = (markersize = 10, color = :white, strokecolor = :black, strokewidth = 1.5)
+fig = Figure(size = (800, 750))
+ax1 = Axis(fig[1, 1]; xlabel = "x", title = "coarse, $(length(x0)) knots")
+ax2 = Axis(fig[1, 2]; xlabel = "x", title = "refined, $(length(x_t)) knots")
+for (ax, itp) in ((ax1, itp0), (ax2, itp_t))              # each panel: interpolant over f
+    lines!(ax, xr, itp.(xr); label = "interpolant")
+    lines!(ax, xr, runge.(xr); color = :black, linestyle = :dash, label = "f")
+    scatter!(ax, x0, runge.(x0); knot_style..., label = "initial knots")
+end
+scatter!(ax2, x_added, runge.(x_added); markersize = 6, color = :black, label = "added knots")
+Legend(fig[2, 1:2], ax2; orientation = :horizontal)       # one legend for both panels
+ax3 = Axis(fig[3, 1:2]; xlabel = "knots", ylabel = "largest error", yscale = log10)
+scatterlines!(ax3, counts_t, errs_t; label = "targeted")
+scatterlines!(ax3, counts_u, errs_u; label = "every interval halved")
+Legend(fig[4, 1:2], ax3; orientation = :horizontal)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | knots | largest error |")
+println("|:--|--:|--:|")
+@printf("| coarse | %d | %.1e |\n", first(counts_t), first(errs_t))
+@printf("| targeted | %d | %.1e |\n", last(counts_t), last(errs_t))
+@printf("| every interval halved | %d | %.1e |\n", last(counts_u), last(errs_u))
+```
+
+Where the coarse interpolant overshoots, the estimate is large, and the targeted run adds its
+knots there; halving every interval also spends knots where the interpolant was already
+accurate. The table shows what each run needs for the same accuracy.
+
+The estimate sees only the knots and their values. A feature that lies entirely between two
+knots is invisible to it, and where the data have a kink or a jump the estimate does not fall,
+so the same interval is suggested at every pass: a refinement loop needs a limit on its passes,
+as above. A tolerance near the precision of the data flags intervals without end, since the
+differences are then rounding noise.
+
+Adding one knot to a grid of two thousand, against rebuilding the interpolant on the merged
+knots:
+
+```{julia}
+using Chairmarks
+xb = sinpi.(range(-0.5, 0.5, length = 2000))              # 2000 knots, dense at the ends
+itp_b = convolution_interpolation(xb, runge.(xb); kernel = :b13)  # the interpolant on them
+x1 = (xb[1000] + xb[1001]) / 2                            # one new knot, in the middle
+xm = sort(vcat(xb, x1))                                   # the merged knots
+
+itp_r = convolution_refine(itp_b, [x1], runge.([x1]))     # the refined interpolant, and the
+                                                          # warm-up of its timing below
+itp_m = convolution_interpolation(xm, runge.(xm); kernel = :b13)  # the rebuilt one, likewise
+t_refine = (@b convolution_refine(itp_b, [x1], runge.([x1]))).time                # adding the knot
+t_build = (@b convolution_interpolation(xm, runge.(xm); kernel = :b13)).time      # rebuilding
+diff_rm = maximum(abs, itp_r.(xr) .- itp_m.(xr));         # their largest difference on [-1, 1]
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | adding one knot | rebuilding |")
+println("|:--|--:|--:|")
+@printf("| time (ms) | %.3f | %.3f |\n", 1e3 * t_refine, 1e3 * t_build)
+println()
+@printf("The two interpolants differ by at most %.1e on [-1, 1].\n", diff_rm)
+```
+
 ## What is not available
 
-Antiderivatives are uniform-grid only: the precomputed tails that make an integral cost the
-same as an interpolation rely on equal spacing. To integrate data on a nonuniform grid,
-evaluate the nonuniform interpolant on a uniform grid fine enough to carry it and integrate
-that with `derivative = -1`, as on the [integrals page](integrals.qmd). Lazy construction, for
-large grids, is available with `:n3` only; the `:b` kernels build their ghost values when the
-interpolant is created.
+A nonuniform interpolant has no antiderivative of its own: a negative `derivative` needs a
+uniform grid. There are two ways to integrate data on a nonuniform grid, and which one fits
+depends on the data. For trusted data, evaluate the nonuniform interpolant on a uniform grid
+fine enough to carry it, and integrate that with `derivative = -1`, as on the
+[integrals page](integrals.qmd); this keeps the order of the nonuniform kernel. For noisy
+data, or data that are not on a grid at all, the [scattered-data fit](scattered.qmd) returns
+an interpolant on a uniform grid directly, smoothed by default, and that interpolant takes a
+negative `derivative` like any other.
+
+Lazy construction is not available on a nonuniform grid: the ghost values are built when the
+interpolant is created, and asking for `lazy = true` is an error.

@@ -125,6 +125,8 @@ keeps falling as the 7th power of the spacing as samples are added — the
 
 ## Status
 
-ConvolutionInterpolations.jl is at version 1 and its interface is stable. convinterp is an alpha
-release: what it has is tested against the reference, and what it lacks is listed on the
+ConvolutionInterpolations.jl is past version 1. Some minor releases after 1.0 still changed
+its interface; from version 2 on, the aim is to change it only with a new major version, and
+the [release notes](julia/releases.qmd) list what changed in each release. convinterp is an
+alpha release: what it has is tested against the reference, and what it lacks is listed on the
 [feature matrix](features.qmd).

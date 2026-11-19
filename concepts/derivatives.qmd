@@ -57,42 +57,55 @@ println("|:--|--:|--:|")
 ## Which orders a kernel provides
 
 Each kernel supports derivatives up to a fixed order (the table on the
-[interpolation page](interpolation.qmd#the-kernels)): one for `:a3` to `:a7`, three for
-`:b5`, five for `:b7`, six for `:b9` and seven for `:b11` and `:b13`. Asking for more is an
-error. The limit is set by accuracy, not by the polynomials: a kernel of degree $p$ has
-non-trivial derivatives up to order $p$, but each order multiplies the rounding error by
-$1/h$, and beyond the listed order that amplification exceeds what the derivative is worth in
-double precision.
+[interpolation page](interpolation.qmd#the-kernels)): on a uniform grid, one for `:a3` to
+`:a7`, three for `:b5` and five for `:b7` to `:b13`. Asking for more is an error. The limit is
+set by accuracy, not by the polynomials. A kernel that reproduces polynomials of degree $R$
+gives a derivative of order $k$ that converges at order $R + 1 - k$ or better, and the limit is the
+highest $k$ that still converges at second order and is still a continuous function. On a
+uniform grid the `:b` kernels reproduce degree 6 whatever their own degree, so `:b7` to `:b13`
+share the limit of five: the wider kernels are smoother, not higher in order. On a nonuniform
+grid they reproduce their full degree and the limits rise with it, up to eleven for `:b13`;
+the [nonuniform page](nonuniform.qmd) has those.
+
+Rounding is a separate matter. Each derivative order multiplies the rounding error of the data
+by $1/h$, which no limit can express: high orders on fine grids need more than double
+precision.
+
+The Python package still has an earlier version's limits on the widest kernels, six for
+`"b9"` and seven for `"b11"` and `"b13"`. By the rule above those orders converge below
+second order, and the Julia package no longer offers them.
 
 ## Each order costs one order of convergence
 
 Differentiating the interpolant costs about one order of convergence per derivative order: a
-7th-order kernel gives a 6th-order first derivative and a 5th-order second derivative. Runge's
-function again, with `:b7`, and the largest error of the interpolant and its first three
-derivatives against the spacing:
+7th-order kernel gives a 6th-order first derivative, a 5th-order second derivative, and so on
+down to a 2nd-order fifth derivative, the last one `:b7` provides. Runge's function again, with
+`:b7`, and the largest error of the interpolant and of each of its five derivatives against
+the spacing. The derivatives of Runge's function grow quickly with the order, so each error is
+taken relative to the largest value of that derivative on the interval:
 
 ```{julia}
 #| code-fold: true
 #| code-summary: "The convergence study"
 runge(x) = 1 / (1 + 25x^2)                                # Runge's function
-drunge = (x -> -50x / (1 + 25x^2)^2,                      # its first derivative
-          x -> (3750x^2 - 50) / (1 + 25x^2)^3,            # its second derivative
-          x -> (15000x - 375000x^3) / (1 + 25x^2)^4)      # its third derivative
+# its k-th derivative: 1/(1 + 25x²) is the imaginary part of 1/(5x − i), and the k-th derivative
+# of 1/(5x − i) is (−1)ᵏ k! 5ᵏ / (5x − i)ᵏ⁺¹
+drunge(x, k) = imag((-1)^k * factorial(k) * 5.0^k / (5x - im)^(k + 1))
 xr = range(-1, 1, length = 2001)                          # fine points for measuring the error
 ns = [41, 81, 161, 321, 641, 1281]                        # the numbers of samples
 hs = 2 ./ (ns .- 1)                                       # the corresponding spacings
-orders = 0:3                                              # the interpolant and three derivatives
-exact = (runge, drunge...)                                # the function and its derivatives
+orders = 0:5                                              # the interpolant and five derivatives
+scales = [maximum(abs.(drunge.(xr, m))) for m in orders]  # the largest value of each derivative on the interval
 
 errors = [begin
               xn = range(-1, 1, length = n)
               itp_m = convolution_interpolation(xn, runge.(xn); kernel = :b7, derivative = m)
-              maximum(abs.(itp_m.(xr) .- exact[m+1].(xr)))
+              maximum(abs.(itp_m.(xr) .- drunge.(xr, m))) / scales[m+1]   # relative to the derivative's size
           end for n in ns, m in orders]
 
 fig = Figure(size = (800, 420))
 ax = Axis(fig[1, 1]; xscale = log10, yscale = log10, xreversed = true,
-          xlabel = "spacing h", ylabel = "largest error")
+          xlabel = "spacing h", ylabel = "largest relative error")
 for m in orders
     scatterlines!(ax, hs, max.(errors[:, m+1], 1e-17); markersize = 8, label = "derivative $m")
 end
@@ -111,7 +124,11 @@ observed = [begin
 println("| | ", join(("derivative $m" for m in orders), " | "), " |")
 println("|:--|", "--:|"^length(orders))
 println("| observed convergence order | ", join((@sprintf("%.2f", o) for o in observed), " | "), " |")
+println("| order by the rule, 7 − k | ", join((@sprintf("%.2f", 7 - m) for m in orders), " | "), " |")
 ```
+
+The fifth derivative converges at second order, which is where the limit of five comes from: a
+sixth derivative would converge at first order.
 
 ## Derivatives in more dimensions
 

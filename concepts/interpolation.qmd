@@ -91,9 +91,15 @@ is how many data values each evaluated point combines.
 | `:a7` | 7 | $C^5$ | 1 | 4 | 3rd order | $8^N$ |
 | `:b5` | 5 | $C^3$ | 3 | 6 | 6th order | $10^N$ |
 | `:b7` | 7 | $C^5$ | 5 | 8 | 7th order | $12^N$ |
-| `:b9` | 9 | $C^7$ | 6 | 8 | 7th order | $14^N$ |
-| `:b11` | 11 | $C^9$ | 7 | 8 | 7th order | $16^N$ |
-| `:b13` | 13 | $C^{11}$ | 7 | 8 | 7th order | $18^N$ |
+| `:b9` | 9 | $C^7$ | 5 | 8 | 7th order | $14^N$ |
+| `:b11` | 11 | $C^9$ | 5 | 8 | 7th order | $16^N$ |
+| `:b13` | 13 | $C^{11}$ | 5 | 8 | 7th order | $18^N$ |
+
+The table is for uniform grids. On a nonuniform grid the `:b` kernels converge at order
+degree + 1 and provide derivatives up to degree − 2; the [nonuniform page](nonuniform.qmd) has
+that table. The Python package still accepts derivatives up to 6 for `"b9"` and 7 for `"b11"`
+and `"b13"`, an earlier version's limits; the [derivatives page](derivatives.qmd) explains the
+rule.
 
 In Python the kernels are strings, `"b7"` instead of `:b7`. The convergence order follows from
 the polynomials a kernel reproduces exactly: a kernel that reproduces polynomials up to degree
@@ -103,13 +109,16 @@ Some guidance:
 
 - **`:b7` is the default in 1D and 2D**, and the right choice for most smooth data: 7th-order
   convergence and five continuous derivatives.
-- **`:b7` to `:b13` all converge at 7th order.** The wider kernels are not more accurate; they
-  are smoother and provide higher derivatives. Choose `:b9` to `:b13` when you need those.
+- **`:b7` to `:b13` all converge at 7th order.** On a uniform grid the wider kernels are not
+  more accurate and provide the same derivatives; they are smoother. On a nonuniform grid they
+  are also higher in order and provide higher derivatives, which is where `:b9` to `:b13` earn
+  their wider stencil.
 - **`:b5` converges at 6th order** with a smaller stencil, which makes it the default in 3D.
 - **`:a4` is a fast 4th-order kernel**, comparable to a cubic spline, and `:a1` is linear
   interpolation. `:a5` and `:a7` are smoother than `:a3` but converge at the same 3rd order.
 - **`kernel = :auto`**, the default, chooses by the number of dimensions, to keep the stencil
-  affordable: `:b7` up to 2D, `:b5` in 3D, `:a4` in 4D and 5D, and `:a3` beyond.
+  affordable: `:b7` up to 2D, `:b5` in 3D, `:a4` in 4D and 5D, and `:a3` beyond. On a
+  nonuniform grid the choice from 4D is `:n3`.
 
 ## Convergence
 
@@ -225,11 +234,16 @@ on the stencil — locating the cell is one division per axis on a uniform grid.
 
 ## Resampling
 
-When the result is wanted on another uniform grid rather than at arbitrary points, the Julia
+When the result is wanted on another grid rather than at arbitrary points, the Julia
 package's `convolution_resample` goes from grid to grid in one separable pass — one axis at a
 time, with the kernel weights of each output knot computed once per axis — and can
 differentiate on the way. It agrees with evaluating the interpolant at the new knots, and is
-faster, since neither the interpolant nor its ghost values are built:
+faster because the passes are separable: each pass applies a one-dimensional stencil along its
+axis, where the interpolant combines the full tensor-product stencil at every point. The ghost
+values are still needed, but they are computed line by line as each pass reaches them and never
+stored, and the corners of the ghost region, which an interpolant has to fill, are never
+computed at all. The input grid must be uniform; the output knots can be any points within its
+range:
 
 ```{julia}
 xc = range(0, 2π, length = 30)                            # the coarse grid along x
@@ -246,11 +260,11 @@ zn_dx = convolution_resample((xc, yc), (xn, yn), zc; derivative = (1, 0));  # �
 #| echo: false
 #| output: asis
 using Chairmarks
-itp_c = convolution_interpolation((xc, yc), zc; kernel = :b13)   # the same kernel the resampler uses by default
+itp_c = convolution_interpolation((xc, yc), zc; kernel = :b7)    # the same kernel the resampler uses by default
 by_itp = [itp_c(xi, yi) for xi in xn, yi in yn]                  # the interpolant at the fine knots
 t_res = (@b convolution_resample(($xc, $yc), ($xn, $yn), $zc)).time
 t_itp = (@b begin                                                 # construct once, then evaluate at every fine knot
-    itp_t = convolution_interpolation(($xc, $yc), $zc; kernel = :b13)
+    itp_t = convolution_interpolation(($xc, $yc), $zc; kernel = :b7)
     [itp_t(xi, yi) for xi in $xn, yi in $yn]
 end).time
 println("| | resample | construct and evaluate |")
@@ -260,9 +274,32 @@ println("|:--|--:|--:|")
 @printf("| largest error of ∂/∂x against cos(x)cos(y) | %.1e | |\n", maximum(abs.(zn_dx .- [cos(xi) * cos(yi) for xi in xn, yi in yn])))
 ```
 
-The default kernel of the resampler is `:b13`, the smoothest of the 7th-order kernels;
-`kernel` and `bc` take the same values as for the interpolant. Antiderivatives are not
-resampled; build the interpolant with `derivative = -1` for those.
+The output knots need not be evenly spaced. Runge's function on a uniform grid, resampled onto
+points that crowd around its peak:
+
+```{julia}
+xu = range(-1, 1, length = 81)                            # the uniform input grid
+yu = runge.(xu)                                           # Runge's function on it
+tg = range(-1, 1, length = 121)                           # a uniform parameter
+xgr = sign.(tg) .* tg .^ 2                                # graded points: dense near zero, sparse at the ends
+ygr = convolution_resample(xu, xgr, yu);                  # the data on the graded points
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+itp_u = convolution_interpolation(xu, yu; kernel = :b7)   # the interpolant with the resampler's default kernel
+println("| | graded resampling |")
+println("|:--|--:|")
+@printf("| largest error against the function | %.1e |\n", maximum(abs.(ygr .- runge.(xgr))))
+@printf("| largest difference from the interpolant at the same points | %.1e |\n", maximum(abs.(ygr .- itp_u.(xgr))))
+```
+
+The default kernel of the resampler is `:b7`; `kernel` and `bc` take the same values as for
+the interpolant. The input grid has to be uniform and the output knots have to lie within it:
+the resampler raises an error otherwise, since it neither handles nonuniform data nor
+extrapolates. Antiderivatives are not resampled; build the interpolant with `derivative = -1`
+for those.
 
 ## Where the data end
 
@@ -288,10 +325,11 @@ like any high-order interpolation:
 - **Noise isn't removed.** The interpolant passes through every data value, noise included, and
   derivatives amplify noise however high the order: for noisy measurements, smooth first — the
   [smoothing page](smoothing.qmd) has the tools.
-- **Polynomial boundaries need enough data.** `:poly` and `:detect` need at least four knots
-  along an axis for `:a3` to `:a7`, six for `:b5` and eight for `:b7` to `:b13`. With fewer,
-  the boundaries fall back to linear extrapolation, and the kernel's full order isn't reached
-  there.
+- **Polynomial boundaries need enough data.** `:poly` needs at least four knots along an axis
+  for `:a3` to `:a7`, six for `:b5` and eight for `:b7` to `:b13`; `:detect`, the default,
+  needs one more, since its test of the data uses one knot beyond the extrapolation's. With
+  fewer, the boundaries fall back to linear extrapolation, and the kernel's full order isn't
+  reached there.
 - **`:detect` is a heuristic.** It tests how smooth the data are near each boundary. It
   reliably falls back to linear for noisy or rough boundary data, but a single outlier at the
   very end can pass as smooth. When you know your data, choose `bc` explicitly.

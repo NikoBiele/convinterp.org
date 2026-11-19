@@ -11,8 +11,8 @@ quintic FITPACK spline of Dierckx.jl — and against the package's own other rou
 the samples as scattered points and fits a uniform-grid interpolant through them exactly
 (`fit_scattered` with `mode = :exact`). First the convergence order on jittered knots, which is
 the claim to verify: on nonuniform grids the `b` kernels converge at order degree + 1, so
-`:b13` is a 14th-order interpolant. Then the time to construct and to evaluate, and the two
-together.
+`:b13` is a 14th-order interpolant. Then its derivatives, up to the eleventh, and after that
+the time to construct and to evaluate, and the two together.
 
 ```{julia}
 #| code-fold: true
@@ -142,6 +142,74 @@ their cubic rate and the linear interpolant at  its second. The order column is 
 `BigFloat`, over the last doubling that is clear of each method's floor, so the `Float64`-only
 methods are measured before theirs.
 
+## Derivatives up to the eleventh
+
+On a nonuniform grid a `b` kernel reproduces polynomials up to its own degree, so its
+derivatives keep more of the order than on a uniform grid: derivative $k$ of the `:b13`
+interpolant converges at order $14 - k$, and the kernel is eleven times continuously
+differentiable, which makes the eleventh derivative the last one, at third order. The study
+below takes every order from 0 to 11 on the same jittered knots, against the exact derivatives
+of Runge's function. Those grow by many orders of magnitude from the first to the eleventh, so
+each error is taken relative to the largest value of that derivative on the interval.
+
+Differentiation amplifies the rounding of the data by $1/h$ per order, and in `Float64`, on
+the left, that overtakes the convergence: the higher the derivative, the sooner its curve
+turns and climbs as the knots are refined. High derivatives on fine grids need more digits,
+and since the package is generic over the element type the same call in `BigFloat`, on the
+right, shows the orders in full.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The derivative study"
+# the k-th derivative of Runge's function, in the type of x: 1/(1 + 25x²) is the imaginary part
+# of 1/(5x − i), and the k-th derivative of 1/(5x − i) is (−1)ᵏ k! 5ᵏ / (5x − i)ᵏ⁺¹
+drunge(x, k) = imag((-1)^k * factorial(k) * oftype(x, 5)^k / (5x - im)^(k + 1))
+
+ns_d = [41, 81, 161, 321, 641, 1281]                      # the numbers of jittered knots
+orders_d = 0:11                                           # the interpolant and its eleven derivatives
+
+# the largest relative error of every derivative of the :b13 interpolant, in the element type T:
+# one row per number of knots, one column per derivative order
+function derivative_errors(T)
+    xt = range(T(-1), T(1), length = 2001)                # the fine points, in T
+    [begin
+         x = jittered(T, n)                               # the knots, in T
+         itp = convolution_interpolation(x, runge.(x); kernel = :b13, derivative = k)
+         exact_k = drunge.(xt, k)                         # the exact derivative at the fine points
+         Float64(maximum(abs.(itp.(xt) .- exact_k)) / maximum(abs.(exact_k)))
+     end for n in ns_d, k in orders_d]
+end
+derr_f = derivative_errors(Float64)
+derr_b = setprecision(BigFloat, 128) do
+    derivative_errors(BigFloat)
+end
+
+fig = Figure(size = (800, 560))
+ax1 = Axis(fig[1, 1]; xscale = log10, yscale = log10, xlabel = "knots", ylabel = "largest relative error", title = "Float64")
+ax2 = Axis(fig[1, 2]; xscale = log10, yscale = log10, xlabel = "knots", title = "BigFloat, 128 bits")
+for (ax, derr) in ((ax1, derr_f), (ax2, derr_b))
+    for (j, k) in enumerate(orders_d)
+        scatterlines!(ax, ns_d, max.(derr[:, j], 1e-40); markersize = 7, color = k, colorrange = (0, 11),
+                      colormap = :viridis, label = "derivative $k")
+    end
+end
+Legend(fig[2, 1:2], ax2; orientation = :horizontal, nbanks = 3)
+fig
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+# the observed order in BigFloat over the last doubling of the knots
+last_order = [log(derr_b[end-1, j] / derr_b[end, j]) / log((ns_d[end] - 1) / (ns_d[end-1] - 1)) for j in eachindex(orders_d)]
+println("| derivative | ", join(orders_d, " | "), " |")
+println("|:--|", "--:|"^length(orders_d))
+println("| observed order | ", join((@sprintf("%.1f", o) for o in last_order), " | "), " |")
+println("| order by the rule, 14 − k | ", join((@sprintf("%.1f", 14 - k) for k in orders_d), " | "), " |")
+```
+
+The observed orders are measured in `BigFloat` over the last doubling of the knots.
+
 ## Setup and query
 
 The time to construct an interpolant on jittered knots and the time to evaluate it on the two
@@ -223,9 +291,10 @@ within a factor of two of the fastest method here.
 
 ## What the nonuniform kernels do not do
 
-The nonuniform path interpolates and differentiates — derivatives up to the kernel's range,
-as on uniform grids — but has no antiderivatives, takes the kernel's own boundary extension as
-its only boundary rule, and offers the `b` kernels and `:n3` only, not `:a4`, `:a5` or `:a7`.
+The nonuniform path interpolates and differentiates, with derivatives up to degree − 2 for the
+`b` kernels, but has no antiderivatives, takes the kernel's own boundary extension as its only
+boundary rule, and offers the `b` kernels, `:n3`, `:a1` and `:a0` only, not `:a4`, `:a5` or
+`:a7`.
 In several dimensions each axis chooses its own path, so a grid uniform along some axes and
 nonuniform along others costs the nonuniform construction only on the latter. The
 [concept page](../../concepts/nonuniform.qmd) has the details.

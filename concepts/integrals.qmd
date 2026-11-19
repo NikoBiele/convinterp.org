@@ -5,7 +5,7 @@ engine: julia
 
 ```{julia}
 #| echo: false
-using ConvolutionInterpolations, CairoMakie, Printf
+using ConvolutionInterpolations, CairoMakie, Printf, Random
 ```
 
 A negative `derivative` order gives an interpolant of an integral: `derivative = -1` is the
@@ -14,6 +14,14 @@ evaluated analytically from the kernel's polynomial pieces, not by quadrature, a
 anchored at the first knot: there the integral is zero, and so are all lower integrals. So the
 antiderivative evaluated at $b$ is $\int_{x_0}^{b}$ of the interpolant, and a definite integral
 between two limits is the difference of two evaluations.
+
+In the Julia package an integral can be evaluated in two ways, and the choice is between speed
+and memory. By default (`fast = true`) the contribution of the knots left of the stencil is
+precomputed and stored when the interpolant is built, so an evaluation costs the same whatever
+the size of the grid. With `fast = false` nothing is stored beyond the data, and every
+evaluation sums over the knots up to the stencil instead: the cost of an evaluation then grows
+with the grid, but the interpolant needs no extra memory. The two agree to rounding. The
+[section below](#fast-or-low-memory) shows when each is the better choice.
 
 ## A first example
 
@@ -105,12 +113,84 @@ println("|:--|--:|--:|--:|")
 println("| observed convergence order | ", join((@sprintf("%.2f", o) for o in observed), " | "), " |")
 ```
 
-Evaluating an integral costs about the same as evaluating the interpolant, whatever the number
-of knots: the contribution of every knot left of the stencil is a polynomial in the position
-within the cell, and those are precomputed when the interpolant is built. Each kernel supports
-integrals up to a fixed order, 2 for `:a0` and `:a1`, 4 for the other `:a` kernels, 6 for
-`:b5` and 8 for `:b7` to `:b13`; the precomputed tables grow with the order, so high orders in
-several dimensions cost memory.
+Each kernel supports integrals up to a fixed order: 2 for `:a0` and `:a1`, 4 for the other
+`:a` kernels, 6 for `:b5` and 8 for `:b7` to `:b13`.
+
+## Fast or low memory
+
+With the default, `fast = true`, evaluating an integral costs about the same as evaluating the
+interpolant, whatever the number of knots: the contribution of every knot left of the stencil
+is a polynomial in the position within the cell, and those polynomials are precomputed and
+stored when the interpolant is built. The stored tables grow with the integral order and with
+the number of integrated axes, so high orders in several dimensions cost memory. With
+`fast = false` the tables are left out, and each evaluation sums over the knots between the
+anchor and the stencil instead. The same twofold integral along both axes of a 400 × 400 grid,
+built both ways:
+
+```{julia}
+xm = range(0, 2π, length = 400)                           # knots along x
+ym = range(0, 2π, length = 400)                           # knots along y
+dm = [sin(xi) * cos(yi) for xi in xm, yi in ym]           # sin(x)·cos(y) on the grid
+
+i_fast = convolution_interpolation((xm, ym), dm; derivative = (-2, -2))                # the default: tables stored
+i_lean = convolution_interpolation((xm, ym), dm; derivative = (-2, -2), fast = false)  # nothing stored beyond the data
+
+i_fast(4.0, 5.0), i_lean(4.0, 5.0)                        # the same integral: (4 − sin 4)·(1 − cos 5)
+```
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The timings and sizes"
+using Chairmarks                                          # the benchmarking package
+
+# Write a time in seconds with a unit that suits its size
+function readable_time(t)
+    if t < 1e-6
+        return @sprintf("%.0f ns", 1e9 * t)                 # below a microsecond: nanoseconds
+    elseif t < 1e-3
+        return @sprintf("%.1f μs", 1e6 * t)                 # below a millisecond: microseconds
+    else
+        return @sprintf("%.1f ms", 1e3 * t)                 # otherwise milliseconds
+    end
+end
+
+build_fast = (@b convolution_interpolation((xm, ym), dm; derivative = (-2, -2))).time                # time to build with tables
+build_lean = (@b convolution_interpolation((xm, ym), dm; derivative = (-2, -2), fast = false)).time  # time to build without
+eval_fast = (@b i_fast(4.0, 5.0)).time                    # time of one evaluation with tables
+eval_lean = (@b i_lean(4.0, 5.0)).time                    # time of one evaluation without
+size_fast = Base.summarysize(i_fast) / 2^20               # memory held by the interpolant, in MiB
+size_lean = Base.summarysize(i_lean) / 2^20               # the same without the tables
+nothing                                                   # the table below shows the results
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | value at (4, 5) | construction | one evaluation | memory |")
+println("|:--|--:|--:|--:|--:|")
+@printf("| `fast = true` | %.12f | %s | %s | %.1f MiB |\n", i_fast(4.0, 5.0), readable_time(build_fast), readable_time(eval_fast), size_fast)
+@printf("| `fast = false` | %.12f | %s | %s | %.1f MiB |\n", i_lean(4.0, 5.0), readable_time(build_lean), readable_time(eval_lean), size_lean)
+```
+
+The cost of each option follows a simple rule. With integral orders $m_1, \dots, m_n$ along
+the $n$ integrated axes, the default holds
+
+$$
+\prod_{i=1}^{n} (1 + m_i)
+$$
+
+arrays the size of the data: one is the data itself, and the other $\prod_i (1 + m_i) - 1$ are
+the stored tables. One evaluation costs the same on any grid.
+With `fast = false` there is one array, the data, and one evaluation sums over the knots
+between the anchor and the point along the integrated axes, so its cost is proportional to the
+number of knots in that box. In the example above both orders are 2, which makes
+$(1 + 2)(1 + 2)$ arrays against one. Three axes at the highest order of the `:b7` kernel would
+need $(1 + 8)^3$ arrays the size of the data; that is where `fast = false` is the option that
+remains. The tables are stored for at most three integrated axes: with four or more, every
+evaluation sums over the knots, whatever `fast` is set to.
+
+So the default suits an integral that is evaluated many times, and `fast = false` suits a few
+evaluations on a large dataset, or orders and dimensions whose tables would not fit in memory.
 
 ## Integrals in more dimensions
 
@@ -182,8 +262,78 @@ Legend(fig[1, 2], ax)
 fig
 ```
 
-## Nonuniform grids
+## Nonuniform and scattered data
 
-Integrals are available on uniform grids only, in both packages; the nonuniform kernels of the
-Julia package support interpolation and derivatives but not antiderivatives. The
-[nonuniform page](nonuniform.qmd) says what to do instead.
+The examples above are on uniform grids, which is what a negative `derivative` needs. Data
+that are not on a uniform grid are integrated in the Julia package in one of two ways, and
+which one fits depends on the data: resampling a nonuniform interpolant on a uniform grid, for
+trusted data on a nonuniform grid, or the scattered-data fit, for noisy data and for data that
+are not on a grid at all. In the Python package, integrals are for uniform grids for now.
+
+### Trusted data on a nonuniform grid
+
+The [nonuniform kernels](nonuniform.qmd) keep their high order on any grid, so trusted data on
+a nonuniform grid are best interpolated with them first. That interpolant has no antiderivative
+of its own, but it can be evaluated on a uniform grid fine enough to carry it, and the result
+integrated. Runge's function on jittered knots, uniform knots each moved by a random fraction
+of the spacing:
+
+```{julia}
+Random.seed!(1)                                           # the same jitter at every render
+nj = 81                                                   # the number of knots
+hj = 2 / (nj - 1)                                         # their average spacing on [-1, 1]
+xj = collect(range(-1, 1, length = nj))                   # start from uniform knots
+xj[2:end-1] .+= 0.3hj .* (rand(nj - 2) .- 0.5)            # move the inner ones by up to 15 % of the spacing
+yj = runge.(xj)                                           # Runge's function at the jittered knots
+
+itp_j = convolution_interpolation(xj, yj; kernel = :b7)   # the nonuniform interpolant
+xu = range(-1, 1, length = 2nj - 1)                       # a uniform grid, twice as fine on average
+ij = convolution_interpolation(xu, itp_j.(xu); derivative = -1)   # resampled and integrated from −1
+
+ij(0.0), ij(1.0)                                          # atan(5)/5 and 2·atan(5)/5
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | ∫ from −1 to 0 | ∫ from −1 to 1 |")
+println("|:--|--:|--:|")
+@printf("| interpolant | %.12f | %.12f |\n", ij(0.0), ij(1.0))
+@printf("| exact | %.12f | %.12f |\n", irunge[1](0.0), irunge[1](1.0))
+```
+
+### Noisy or scattered data
+
+Measured data usually carry noise, and scattered points are not on a grid, so neither suits
+the nonuniform kernels. The [scattered-data fit](scattered.qmd) takes the samples as points
+and returns an interpolant on a uniform grid of its own, smoothed by default with the amount
+of smoothing chosen automatically, and that interpolant takes a negative `derivative`
+directly. The integral is anchored at the first knot of the fit's grid, which is the leftmost
+sample. Runge's function measured with noise at random positions:
+
+```{julia}
+Random.seed!(2)                                           # the same samples at every render
+np = 200                                                  # the number of samples
+xp = 2 .* rand(np) .- 1                                   # random positions on [-1, 1]
+yp = runge.(xp) .+ 0.01 .* randn(np)                      # Runge's function, measured with noise
+
+pts = reshape(xp, 1, :)                                   # the samples as points: a matrix, one column each
+ip = convolution_interpolation(pts, yp; derivative = -1)  # smoothing fit, integrated from the leftmost sample
+
+x0 = minimum(xp)                                          # the anchor of the integral
+ip(0.0), ip(0.5)                                          # the integrals from x0 to 0 and to 0.5
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | ∫ from x₀ to 0 | ∫ from x₀ to 0.5 |")
+println("|:--|--:|--:|")
+@printf("| interpolant | %.6f | %.6f |\n", ip(0.0), ip(0.5))
+@printf("| exact | %.6f | %.6f |\n", irunge[1](0.0) - irunge[1](x0), irunge[1](0.5) - irunge[1](x0))
+```
+
+The fit has to stay on its default uniform grid for an integral, since `grid = :adaptive` gives
+a nonuniform interpolant. For trusted scattered data, `mode = :exact` interpolates the points
+instead of smoothing them. The [scattered data page](scattered.qmd) has the details and an
+integral over a box of scattered points in two dimensions.

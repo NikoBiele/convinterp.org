@@ -23,13 +23,17 @@ using Pkg
 Pkg.add("ConvolutionInterpolations")
 ```
 
-The package depends only on the standard library and a handful of small registered packages;
-plotting is not among them, so the examples on this site load `Plots` separately.
+The package depends only on Julia's standard libraries, `LinearAlgebra` and `SparseArrays`;
+plotting is not among them, so the examples on this site load `CairoMakie` separately.
 
 ## The functions
 
-Everything is reached through six exported functions, each returning an interpolant that is
-called like a function:
+Everything is reached through seven exported functions. `convolution_interpolation` appears
+twice in the table, once for gridded data and once for scattered points; it returns an
+interpolant that is called like a function, as do `convolution_gaussian` and
+`convolution_refine`. `fit_scattered` returns the fitted grid, `convolution_smooth` and
+`convolution_resample` return arrays, and `convolution_suggest` returns the points where an
+interpolant needs knots:
 
 | Function | What it does | Concept page |
 |:--|:--|:--|
@@ -38,10 +42,12 @@ called like a function:
 | `fit_scattered(points, values)` | The fit behind the scattered-data method, returning the fitted grid itself | [Scattered data](../concepts/scattered.qmd) |
 | `convolution_smooth(knots, data, B)` | Gaussian smoothing of gridded data, separably in any dimension | [Smoothing](../concepts/smoothing.qmd) |
 | `convolution_gaussian(knots, data, B)` | The same smoothing as an interpolant, evaluated anywhere | [Smoothing](../concepts/smoothing.qmd) |
-| `convolution_resample(knots, data, new_knots)` | Resamples from one uniform grid to another, optionally differentiating in the same pass | [Interpolation](../concepts/interpolation.qmd) |
+| `convolution_resample(knots, new_knots, data)` | Resamples from one uniform grid to another, optionally differentiating or integrating in the same pass | [Interpolation](../concepts/interpolation.qmd) |
+| `convolution_suggest(itp)` | Estimates the error of a 1D nonuniform interpolant per interval and returns where it needs knots | [Nonuniform grids](../concepts/nonuniform.qmd#targeted-refinement) |
+| `convolution_refine(itp, x_new, values_new)` | Adds knots to a 1D nonuniform interpolant, recomputing only the weights near them | [Nonuniform grids](../concepts/nonuniform.qmd#targeted-refinement) |
 
 The kernels themselves are selected with the `kernel` keyword, `:a0` to `:a7` and `:b5` to `:b13`
-on uniform grids and `:n3` or `:b5` to `:b13` on nonuniform ones; the
+on uniform grids and `:a0`, `:a1`, `:n3` or `:b5` to `:b13` on nonuniform ones; the
 [interpolation page](../concepts/interpolation.qmd) has the table of their degrees, continuity
 and convergence orders, and the [API reference](api.qmd) has every keyword.
 
@@ -58,16 +64,23 @@ in what the language allows rather than in the results:
   uniform-grid evaluation does not depend on the grid size. Interpolants can be evaluated from
   several threads at once.
 - **Lazy construction for large grids.** Boundary ghost values are normally precomputed when the
-  interpolant is built; for large grids in several dimensions the package instead computes them
-  on the fly in boundary cells (`lazy=true`), so construction takes about a millisecond whatever
-  the grid, and no enlarged copy of the data is made. The default chooses by the size of the grid.
+  interpolant is built; for large uniform grids in several dimensions the package instead
+  computes them on the fly in boundary cells (`lazy=true`), so construction costs next to
+  nothing whatever the grid, and no enlarged copy of the data is made. The default chooses by
+  the size of the grid. Nonuniform grids and integrals are always built with their ghost values.
+- **Integrals with or without stored tables.** By default an integral precomputes tables when
+  the interpolant is built, so that an evaluation is independent of the grid size. With
+  `fast = false` the tables are left out and each evaluation sums over the data instead, which
+  makes high-order integrals in several dimensions possible when the tables would not fit in
+  memory. The [integrals page](../concepts/integrals.qmd#fast-or-low-memory) gives the cost of
+  each. The Python port always stores the tables.
 - **Extrapolation.** The `extrap` keyword chooses what happens outside the data: `:throw`
   (the default), `:flat`, `:line` or `:natural`. The Python port does not extrapolate yet.
 - **Nonuniform grids are detected.** Passing nonuniformly spaced knots switches to the
   nonuniform kernels without any keyword; the [nonuniform page](../concepts/nonuniform.qmd)
   explains what changes.
-- **Plotting.** The examples on this site use `Plots`; the interpolants broadcast like any Julia
-  function, so `itp.(xs)` and `itp.(xs, ys')` are all that is needed for lines and surfaces.
+- **Plotting.** The examples on this site use `CairoMakie`; the interpolants broadcast like any
+  Julia function, so `itp.(xs)` and `itp.(xs, ys')` are all that is needed for lines and surfaces.
 
 ## Where next
 

@@ -11,10 +11,10 @@ for the weights; the thin-plate spline and the cubic polyharmonic spline of
 ScatteredInterpolation.jl are used, the two that have no shape parameter to choose. Natural
 neighbours interpolate from the Voronoi cells of a Delaunay triangulation; NaturalNeighbours.jl
 provides them, and its `Sibson(1)` and `Hiyoshi(2)` are the C¹ and C² ones. The radial basis
-functions work in any dimension; natural neighbours exist in two, which is where everything on
-this page is measured. First trusted data as the points grow, then noisy data, then the time to
-construct and to evaluate, the two together, and finally what the fit returns that the others
-do not.
+functions work in any dimension; natural neighbours exist in two, which is where most of this
+page is measured. First trusted data as the points grow, then noisy data, then the time to
+construct and to evaluate, the two together, then the fit against the thin-plate spline in
+three dimensions, and finally what the fit returns that the others do not.
 
 ```{julia}
 #| code-fold: true
@@ -237,7 +237,8 @@ function timings(n)
     P = points(n, 30)
     v = [franke(p[1], p[2]) for p in eachcol(P)]
     map(methods) do m
-        itp = m.setup(P, v)
+        itp = m.setup(P, v)                               # warm-up: compiles the setup
+        m.query(itp)                                      # and the query, before either is timed
         (setup = (@b $(m.setup)($P, $v)).time, query = (@b $(m.query)($itp)).time)
     end
 end
@@ -274,7 +275,8 @@ wp = map(enumerate(ns)) do (i, n)
     P = points(n, i)
     v = [franke(p[1], p[2]) for p in eachcol(P)]
     map(methods) do m
-        itp = m.setup(P, v)
+        itp = m.setup(P, v)                               # warm-up: compiles the setup
+        m.query(itp)                                      # and the query, before either is timed
         (err = maximum(abs.(m.query(itp) .- exact)),
          time = (@b $(m.setup)($P, $v)).time + (@b $(m.query)($itp)).time)
     end
@@ -297,6 +299,116 @@ not grow at all, and the accuracies it reaches on the larger sets are reached by
 other methods at any cost on this page. Where a fit for a few hundred points at modest accuracy
 is all that is wanted, the radial basis functions are cheaper; where accuracy or many
 evaluations are wanted, the fit is cheaper by every measure.
+
+## Three and four dimensions
+
+The same comparison beyond the plane, where the natural neighbours do not exist, on six test
+functions of different character instead of one: a central peak, an off-centre bump, a product
+of sines, an exponential that is steep at the faces of the box, a sum of bumps and an oblique
+ridge. The points are random in $[-1, 1]^D$, the methods are the fit in its default `:exact`
+mode and the thin-plate spline, and the error is the root mean square over twenty thousand
+random points inside the bounding box of the data. The plane is included for reference. From
+three dimensions the fit solves with `:dual`, its default there, as the
+[scattered-data page](../../concepts/scattered.qmd#solving-an-exact-fit) describes.
+
+```{julia}
+#| code-fold: true
+#| code-summary: "The study in two to four dimensions"
+#| warning: false
+# six test functions of a point p in [-1, 1]^D, each of size about one
+hd_funs = (
+    runge   = p -> 1 / (1 + 25 * sum(abs2, p)),                       # a peak at the centre
+    offbump = p -> exp(-8 * sum(abs2, p .- 0.4)),                     # a bump off the centre
+    wave    = p -> prod(sin(pi * x) for x in p),                      # a product of sines, separable
+    steep   = p -> exp(1.5 * sum(p)) / exp(1.5 * length(p)),          # an exponential, steep at the faces
+    franke  = p -> 0.75 * exp(-4 * sum(abs2, p .+ 0.5)) + 0.5 * exp(-6 * sum(abs2, p .- 0.5)) +
+                   0.2 * exp(-10 * sum(abs2, p .- (-0.6, 0.6, 0.0, 0.0)[1:length(p)])),   # three bumps
+    ridge   = p -> 1 / (1 + 50 * (p[1] - 0.3 * p[2])^2),              # a ridge oblique to the axes
+)
+hd_names = (runge = "central peak", offbump = "off-centre bump", wave = "product of sines",
+            steep = "steep exponential", franke = "sum of bumps", ridge = "oblique ridge")
+hd_counts = Dict(2 => [500, 2000, 8000], 3 => [1000, 2000, 3000],   # points per dimension
+                 4 => [1000, 2000, 4000])
+
+geomean(v) = exp(sum(log, v) / length(v))                 # geometric mean, the summary over the functions
+middle(v) = sort(v)[div(length(v) + 1, 2)]                # the median of an odd or the lower middle of an even count
+
+# evaluate an interpolant at the columns of T; the dimension is passed as a type so that the
+# call compiles for it and the query time measures the evaluation, not the unpacking of points
+hd_evaluate(itp, T, ::Val{D}) where {D} = [itp(ntuple(d -> T[d, j], Val(D))...) for j in axes(T, 2)]
+
+# one point set in D dimensions: errors and times of both methods on the six functions
+function hd_compare(D, n)
+    rng = MersenneTwister(1)                              # the same points at every render
+    P = 2 .* rand(rng, D, n) .- 1                         # n random points in the box, one per column
+    lo = [minimum(view(P, d, :)) for d in 1:D]            # the bounding box of the points,
+    hi = [maximum(view(P, d, :)) for d in 1:D]            # inside which both methods interpolate
+    T = [lo[d] + (hi[d] - lo[d]) * rand(rng) for d in 1:D, _ in 1:20_000]   # the test points
+    out = Dict{Symbol,Any}()
+    for (key, f) in pairs(hd_funs)
+        v = [f(p) for p in eachcol(P)]                    # the data
+        exact_T = [f(p) for p in eachcol(T)]              # the function at the test points
+        t_fit = @elapsed itp = convolution_interpolation(P, v; mode = :exact)   # the fit, package defaults
+        q_fit = @elapsed y_fit = hd_evaluate(itp, T, Val(D))                    # evaluated at the test points
+        t_tps = @elapsed tps = SI.interpolate(SI.ThinPlate(), P, v)             # the thin-plate spline
+        q_tps = @elapsed y_tps = vec(SI.evaluate(tps, T))                       # evaluated at the test points
+        out[key] = (fit = rms(y_fit .- exact_T), tps = rms(y_tps .- exact_T),
+                    t_fit = t_fit, t_tps = t_tps, q_fit = q_fit, q_tps = q_tps)
+    end
+    out
+end
+
+for D in 2:4                                              # compile both methods in every dimension first,
+    hd_compare(D, 200)                                    # so that the times below are run times
+end
+hd = Dict((D, n) => hd_compare(D, n) for D in 2:4 for n in hd_counts[D]);
+```
+
+```{julia}
+#| echo: false
+#| output: asis
+for D in 2:4
+    ns_D = hd_counts[D]
+    println("| ", D, "D, rms error | ", join(("fit, $n points | thin plate, $n points" for n in ns_D), " | "), " |")
+    println("|:--|", "--:|"^(2 * length(ns_D)))
+    for key in keys(hd_funs)
+        cells = (@sprintf("%.1e | %.1e", hd[(D, n)][key].fit, hd[(D, n)][key].tps) for n in ns_D)
+        println("| ", hd_names[key], " | ", join(cells, " | "), " |")
+    end
+    means = (@sprintf("%.1e | %.1e", geomean([hd[(D, n)][key].fit for key in keys(hd_funs)]),
+                      geomean([hd[(D, n)][key].tps for key in keys(hd_funs)])) for n in ns_D)
+    println("| **geometric mean** | ", join(means, " | "), " |")
+    println()
+end
+```
+
+On the geometric mean the fit is clearly the more accurate in two and three dimensions. In
+four dimensions it is ahead on most of the functions but not on all of them, and the rows show
+where the thin-plate spline is level or ahead.
+
+The times of the largest set in each dimension, the median over the six functions, with the
+query being the evaluation at the twenty thousand test points:
+
+```{julia}
+#| echo: false
+#| output: asis
+println("| | fit, setup | thin plate, setup | fit, query | thin plate, query |")
+println("|:--|--:|--:|--:|--:|")
+for D in 2:4
+    n = last(hd_counts[D])
+    r = hd[(D, n)]
+    col(field) = fmt(middle([r[key][field] for key in keys(hd_funs)]))
+    println("| ", D, "D, ", n, " points | ", col(:t_fit), " | ", col(:t_tps), " | ", col(:q_fit), " | ", col(:q_tps), " |")
+end
+```
+
+The thin-plate spline solves one dense system of the size of the point count and evaluates by
+summing over all the points. The fit solves a sparse system on its grid in the plane, and from
+three dimensions a dense system of the size of the point count followed by a short iteration
+on the grid. In every dimension it evaluates locally, from a fixed stencil of grid values
+around the query, so its query time does not grow with the number of points, while the
+thin-plate spline's grows with every point added. The table shows what that means at these
+sizes.
 
 ## What the fit returns
 

@@ -71,6 +71,22 @@ docstring(convolution_gaussian)
 docstring(convolution_resample)
 ```
 
+### `convolution_suggest`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_suggest)
+```
+
+### `convolution_refine`
+
+```{julia}
+#| echo: false
+#| output: asis
+docstring(convolution_refine)
+```
+
 ## Types
 
 ### `ConvolutionInterpolation`
@@ -79,14 +95,6 @@ docstring(convolution_resample)
 #| echo: false
 #| output: asis
 docstring(ConvolutionInterpolation; only_first = true)
-```
-
-### `FastConvolutionInterpolation`
-
-```{julia}
-#| echo: false
-#| output: asis
-docstring(FastConvolutionInterpolation; only_first = true)
 ```
 
 ### `ConvolutionExtrapolation`
